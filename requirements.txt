@@ -1,0 +1,24 @@
+# ==============================================================================
+# OmniTradePro - Institutional Algorithmic Trading Platform
+# Production Dependencies for Windows 10/11 64-bit | Python 3.10+
+# ==============================================================================
+
+# GUI & High-Performance Visuals
+PySide6>=6.6.0
+pyqtgraph>=0.13.3
+
+# Institutional Broker Gateways & Network Communication
+smartapi-python>=1.4.8
+logzero>=1.7.0
+pyotp>=2.9.0
+websocket-client>=1.6.0
+requests>=2.31.0
+
+# Quantitative Modeling, Scanning & Analytics
+yfinance>=0.2.36
+pandas>=2.1.0
+numpy>=1.26.0
+
+# Persistence & Cryptographic Security
+cryptography>=41.0.0
+

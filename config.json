@@ -1,0 +1,42 @@
+{
+  "app": {
+    "name": "OmniTradePro",
+    "version": "1.0.0",
+    "environment": "production",
+    "theme": "glassmorphism_dark",
+    "default_broker": "ANGEL_ONE",
+    "default_mode": "PAPER"
+  },
+  "market_hours": {
+    "equity_open": "09:15",
+    "equity_close": "15:30",
+    "equity_square_off": "15:15",
+    "mcx_open": "09:00",
+    "mcx_close": "23:30",
+    "mcx_square_off": "23:15"
+  },
+  "risk_rules": {
+    "max_capital_risk_pct": 10.0,
+    "friction_buffer_inr": 60.0,
+    "min_gross_profit_trigger_inr": 70.0,
+    "max_daily_loss_inr": 2000.0
+  },
+  "watchlist": {
+    "nifty50_anchor": [
+      "RELIANCE.NS",
+      "TCS.NS",
+      "HDFCBANK.NS",
+      "INFY.NS",
+      "ICICIBANK.NS",
+      "TATAMOTORS.NS",
+      "SBIN.NS",
+      "BHARTIARTL.NS"
+    ],
+    "mcx_anchor": [
+      "CRUDEOIL",
+      "GOLDM",
+      "SILVERM"
+    ]
+  }
+}
+

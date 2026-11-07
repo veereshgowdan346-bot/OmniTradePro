@@ -1,0 +1,41 @@
+# Python Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Master Encryption & Secret Keys (ABSOLUTE PROHIBITION)
+*.key
+.vault.key
+database/.vault.key
+.env
+*.pem
+*.crt
+secrets.json
+
+# Local Databases & Financial Audit Logs
+*.db
+*.db*
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite*
+database/*.db
+database/*.db*
+database/scrip_cache.json
+
+# Bytecode, Cache & IDE Metadata
+__pycache__/
+*.py[cod]
+*$py.class
+.vscode/
+.idea/
+*.log
+logs/
+
+# Build Artifacts
+dist/
+build/
+*.spec
