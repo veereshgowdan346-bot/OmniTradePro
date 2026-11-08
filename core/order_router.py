@@ -18,11 +18,13 @@ from datetime import datetime, time as dtime, timezone
 from typing import Dict, Any, List, Optional, Callable
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 import json
 from pathlib import Path
 from database.db_manager import DatabaseManager
+from core.risk_budget import RiskBudget
 from brokers.base_broker import (
     BaseBroker,
     OrderRequest,
@@ -72,7 +74,7 @@ class OrderRouter:
                 self.vault = None
 
         self._lock = threading.RLock()
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OrderRouter_Worker")
+        self._executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="BrokerFanOut_Worker")
 
         # Open Positions Tracker (trade_id -> position dict)
         self._open_positions: Dict[int, Dict[str, Any]] = {}
@@ -187,10 +189,12 @@ class OrderRouter:
         order_type: str = "MARKET",
         product: str = "MIS",
         enforce_daily_cap: Optional[bool] = None,
+        current_market_price: Optional[float] = None,
+        enforce_slippage_guard: bool = True,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Executes order strictly adhering to broker toggle matrix and risk guardrails.
+        Executes order strictly adhering to broker toggle matrix, slippage guard, and risk guardrails.
         """
         # Validate parameters
         if quantity <= 0:
@@ -227,6 +231,41 @@ class OrderRouter:
         normalized_side = side.strip().upper()
         normalized_mode = mode.strip().upper()
         normalized_exchange = exchange.strip().upper()
+
+        # === CHECK 0: Dynamic Slippage & Price Drift Guard (0.08% / 8 bps) ===
+        cmp = current_market_price
+        if cmp is None:
+            cmp = kwargs.get("current_price") or kwargs.get("ltp")
+            if cmp is None:
+                try:
+                    from brokers.stream_worker import BrokerStreamWorker
+                    cached_tick = BrokerStreamWorker.get_latest_tick(symbol)
+                    if cached_tick and "ltp" in cached_tick:
+                        cmp = float(cached_tick["ltp"])
+                except Exception:
+                    pass
+
+        if cmp is not None and enforce_slippage_guard and cmp > 0.0:
+            is_acceptable, drift = RiskBudget.is_slippage_acceptable(
+                requested_price=price,
+                current_price=cmp,
+                side=normalized_side,
+                max_slippage_pct=0.0008
+            )
+            if not is_acceptable:
+                msg = (
+                    f"Order blocked: Slippage breach detected. Adverse price drift ({drift*100:.3f}%) "
+                    f"exceeds 0.08% slippage tolerance. Requested: ₹{price:.2f}, Current Market: ₹{cmp:.2f}."
+                )
+                self._notify("Slippage Guard Breach", msg)
+                return {
+                    "status": "REJECTED",
+                    "reason": "SLIPPAGE_BREACH_ABORT",
+                    "slippage_pct": drift,
+                    "requested_price": price,
+                    "current_market_price": cmp,
+                    "message": msg
+                }
 
         # === CHECK 1: Pre-Trade ₹70 Gross Profit Gate ===
         # Validate expected profit before any broker dispatch (side-aware)
@@ -389,12 +428,25 @@ class OrderRouter:
 
             # === STATE 1-3: Route across ready brokers ===
             # State 1: Single broker -> Route exclusively
-            # State 2/3: Multiple brokers -> Parallel dispatch
+            # State 2/3: Multiple brokers -> Parallel dispatch (<60ms latency threshold)
             execution_results: List[Dict[str, Any]] = []
             execution_uuid = str(uuid.uuid4())
 
+            # Convert MARKET orders to marketable limit orders to guard against flash crash slippage
+            order_type_clean = str(order_type).strip().upper()
+            if order_type_clean == "MARKET":
+                effective_order_type = OrderType.LIMIT
+                effective_price = RiskBudget.calculate_marketable_limit_price(
+                    price=price,
+                    side=normalized_side,
+                    max_slippage_pct=0.0008
+                )
+            else:
+                effective_order_type = OrderType.LIMIT
+                effective_price = price
+
             def dispatch_to_broker(b_name: str) -> Dict[str, Any]:
-                """Dispatch order to a specific broker gateway."""
+                """Dispatch order to a specific broker gateway with isolated error boundary."""
                 inst = self._brokers[b_name]
                 # Use unique execution UUID to prevent IDOR and collisions
                 client_order_id = f"OT-{b_name[:2]}-{execution_uuid[:8]}"
@@ -412,15 +464,16 @@ class OrderRouter:
                 else:
                     p_type = ProductType.INTRADAY
 
+                dispatch_err = None
                 try:
                     req = OrderRequest(
                         symbol=symbol,
                         exchange=Exchange.NSE if normalized_exchange == "NSE" else Exchange.BSE,
                         side=OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
-                        order_type=OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT,
+                        order_type=effective_order_type,
                         product_type=p_type,
                         quantity=quantity,
-                        price=price if order_type != "MARKET" else 0.0,
+                        price=effective_price,
                         trigger_price=stop_loss,
                         tag=client_order_id
                     )
@@ -428,6 +481,7 @@ class OrderRouter:
                     b_order_id = order_resp.broker_order_id or client_order_id
                     order_status = order_resp.status.value if hasattr(order_resp.status, "value") else str(order_resp.status)
                 except Exception as err:
+                    dispatch_err = str(err)
                     b_order_id = f"ERR-{b_name[:2]}-{execution_uuid[:8]}"
                     order_status = "REJECTED"
 
@@ -437,17 +491,43 @@ class OrderRouter:
                     "client_order_id": client_order_id,
                     "broker_order_id": b_order_id,
                     "status": order_status,
+                    "error": dispatch_err,
+                    "marketable_limit_price": effective_price,
                     "execution_success": order_status in (OrderStatus.SUBMITTED.value, OrderStatus.OPEN.value),
                 }
 
-            # Non-blocking concurrent execution across all ready brokers
-            futures = [self._executor.submit(dispatch_to_broker, b) for b in ready_brokers]
-            for fut in as_completed(futures):
-                try:
-                    result = fut.result(timeout=10.0)
-                    execution_results.append(result)
-                except Exception as exc:
-                    execution_results.append({"status": "FAILED", "error": str(exc)})
+            # Non-blocking concurrent execution across all ready brokers (<60ms timeout)
+            fanout_start = time.perf_counter()
+            futures = {self._executor.submit(dispatch_to_broker, b): b for b in ready_brokers}
+            try:
+                for fut in as_completed(futures, timeout=0.060):
+                    b_name = futures[fut]
+                    try:
+                        res = fut.result()
+                        execution_results.append(res)
+                    except Exception as exc:
+                        execution_results.append({
+                            "broker": b_name,
+                            "execution_id": execution_uuid,
+                            "client_order_id": f"ERR-{b_name[:2]}-{execution_uuid[:8]}",
+                            "broker_order_id": f"ERR-{b_name[:2]}-{execution_uuid[:8]}",
+                            "status": "FAILED",
+                            "error": str(exc),
+                            "execution_success": False
+                        })
+            except TimeoutError:
+                for fut, b_name in futures.items():
+                    if not fut.done():
+                        execution_results.append({
+                            "broker": b_name,
+                            "execution_id": execution_uuid,
+                            "client_order_id": f"TIMEOUT-{b_name[:2]}-{execution_uuid[:8]}",
+                            "broker_order_id": f"TIMEOUT-{b_name[:2]}-{execution_uuid[:8]}",
+                            "status": "TIMEOUT",
+                            "error": "Fan-out dispatch exceeded 60ms latency threshold",
+                            "execution_success": False
+                        })
+            fanout_latency_ms = (time.perf_counter() - fanout_start) * 1000.0
 
             # Register open position for successfully submitted broker executions
             successful_brokers = [r["broker"] for r in execution_results if r.get("execution_success")]
@@ -483,6 +563,7 @@ class OrderRouter:
                 "side": normalized_side,
                 "quantity": quantity,
                 "price": price,
+                "marketable_limit_price": effective_price,
                 "stop_loss": stop_loss,
                 "target_price": target_price,
                 "execution_mode": "LIVE",
@@ -491,10 +572,88 @@ class OrderRouter:
                 "results": execution_results,
                 "execution_id": execution_uuid,
                 "order_id": primary_res.get("broker_order_id", ""),
-                "message": f"Concurrently routed across {len(ready_brokers)} enabled brokers: {', '.join(ready_brokers)}"
+                "fanout_latency_ms": round(fanout_latency_ms, 2),
+                "message": f"Concurrently routed across {len(ready_brokers)} enabled brokers in {fanout_latency_ms:.2f}ms: {', '.join(ready_brokers)}"
             }
         else:
             raise ValueError(f"Unsupported execution mode '{mode}'. Use 'PAPER' or 'LIVE'.")
+
+    def dispatch_parallel_fanout(
+        self,
+        broker_names: List[str],
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        timeout_ms: float = 60.0
+    ) -> Dict[str, Any]:
+        """
+        Direct benchmark & production harness for sub-50ms parallel multi-broker fan-out.
+        Fans out an order concurrently to all specified brokers, enforcing atomic UUIDs and isolated error handling.
+        """
+        exec_uuid = str(uuid.uuid4())
+        norm_side = side.strip().upper()
+        results = []
+
+        def _sub_worker(b_name: str) -> Dict[str, Any]:
+            b_inst = self._brokers.get(b_name.strip().upper())
+            c_oid = f"FAN-{b_name[:2]}-{exec_uuid[:8]}"
+            if not b_inst:
+                return {"broker": b_name, "status": "REJECTED", "error": "Unknown broker"}
+            try:
+                limit_p = RiskBudget.calculate_marketable_limit_price(price, norm_side, 0.0008)
+                req = OrderRequest(
+                    symbol=symbol,
+                    exchange=Exchange.NSE,
+                    side=OrderSide.BUY if norm_side == "BUY" else OrderSide.SELL,
+                    order_type=OrderType.LIMIT,
+                    product_type=ProductType.INTRADAY,
+                    quantity=quantity,
+                    price=limit_p,
+                    tag=c_oid
+                )
+                resp = b_inst.place_order(req)
+                return {
+                    "broker": b_name,
+                    "execution_id": exec_uuid,
+                    "order_id": resp.broker_order_id or c_oid,
+                    "status": "SUBMITTED",
+                    "success": True
+                }
+            except Exception as e:
+                return {
+                    "broker": b_name,
+                    "execution_id": exec_uuid,
+                    "status": "FAILED",
+                    "error": str(e),
+                    "success": False
+                }
+
+        t_start = time.perf_counter()
+        futures = {self._executor.submit(_sub_worker, b): b for b in broker_names}
+        timeout_sec = timeout_ms / 1000.0
+
+        try:
+            for fut in as_completed(futures, timeout=timeout_sec):
+                b_name = futures[fut]
+                try:
+                    results.append(fut.result())
+                except Exception as e:
+                    results.append({"broker": b_name, "status": "FAILED", "error": str(e), "success": False})
+        except TimeoutError:
+            for fut, b_name in futures.items():
+                if not fut.done():
+                    results.append({"broker": b_name, "status": "TIMEOUT", "error": "Exceeded fanout timeout", "success": False})
+
+        total_latency_ms = (time.perf_counter() - t_start) * 1000.0
+        return {
+            "execution_id": exec_uuid,
+            "dispatched_brokers": broker_names,
+            "results": results,
+            "fanout_latency_ms": round(total_latency_ms, 2),
+            "under_60ms": total_latency_ms < 60.0
+        }
+
 
     # =========================================================================
     # Position Liquidation & Auto Square-Off

@@ -67,7 +67,8 @@ class BrokerStreamWorker(QThread):
     """
     Dedicated QThread worker managing the real-time broker WebSocket connection.
     Processes live market feeds, unpacks binary/JSON frames, and safely dispatches
-    telemetry to the GUI via Qt Signals.
+    telemetry to the GUI via Qt Signals. Features active heartbeat supervision,
+    thread-safe in-memory tick caching, and automatic exponential backoff auto-healing.
     """
     tick_received = Signal(dict)
     connection_status = Signal(str, str)
@@ -85,6 +86,29 @@ class BrokerStreamWorker(QThread):
         7: "NCDEX"
     }
 
+    # Thread-safe in-memory tick state cache
+    _global_ticks_cache: Dict[str, Dict[str, Any]] = {}
+    _cache_lock = threading.RLock()
+
+    @classmethod
+    def get_latest_tick(cls, symbol: str) -> Optional[Dict[str, Any]]:
+        """Retrieve most recent tick for symbol from thread-safe in-memory cache."""
+        with cls._cache_lock:
+            sym_clean = symbol.strip().upper()
+            if sym_clean in cls._global_ticks_cache:
+                return dict(cls._global_ticks_cache[sym_clean])
+            for k, v in cls._global_ticks_cache.items():
+                if k.replace(" ", "") == sym_clean.replace(" ", ""):
+                    return dict(v)
+            return None
+
+    @classmethod
+    def update_tick_cache(cls, symbol: str, tick: Dict[str, Any]) -> None:
+        """Update thread-safe in-memory cache with new tick."""
+        with cls._cache_lock:
+            sym_clean = symbol.strip().upper()
+            cls._global_ticks_cache[sym_clean] = dict(tick)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.broker_name: str = ""
@@ -94,9 +118,37 @@ class BrokerStreamWorker(QThread):
         self._ws = None
         self._token_master = TokenMaster()
 
+        # In-memory instance tick state
+        self._latest_ticks: Dict[str, Dict[str, Any]] = {}
+
+        # Auto-healing & Heartbeat supervision state
+        self._auto_reconnect_enabled: bool = True
+        self._reconnect_backoff_sec: float = 0.5
+        self._max_backoff_sec: float = 10.0
+        self._last_heartbeat_time: float = time.time()
+        self._heartbeat_thread: Optional[threading.Thread] = None
+
         # High-performance decoupled tick queue
         self._tick_queue = queue.Queue(maxsize=10000)
         self._processor_thread: Optional[threading.Thread] = None
+
+    def _heartbeat_supervisor_loop(self) -> None:
+        """
+        Active supervisor thread pinging socket health every 5 seconds.
+        Detects silent socket drops and initiates auto-healing without blocking GUI.
+        """
+        while self._is_running:
+            time.sleep(5.0)
+            if not self._is_running or not self._auto_reconnect_enabled:
+                break
+            
+            # Check for stale connection (>15s without any incoming frame or heartbeat)
+            elapsed = time.time() - self._last_heartbeat_time
+            if elapsed > 15.0 and self._ws:
+                try:
+                    self._ws.close()
+                except Exception:
+                    pass
 
     def _process_ticks_loop(self) -> None:
         """
@@ -138,18 +190,26 @@ class BrokerStreamWorker(QThread):
                 pass
 
         self._is_running = True
+        self._auto_reconnect_enabled = True
+        self._reconnect_backoff_sec = 0.5
+        self._last_heartbeat_time = time.time()
 
         # Start the decoupled processing worker
         self._processor_thread = threading.Thread(target=self._process_ticks_loop, daemon=True)
         self._processor_thread.start()
 
+        # Start active heartbeat supervisor
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_supervisor_loop, daemon=True)
+        self._heartbeat_thread.start()
+
         self.start()
 
     def disconnect_stream(self) -> None:
         """
-        Gracefully terminates active WebSocket frames and background threads.
+        Gracefully terminates active WebSocket frames, supervisor, and background threads.
         Zero lingering sockets or thread leaks.
         """
+        self._auto_reconnect_enabled = False
         self._is_running = False
 
         if self._ws:
@@ -165,6 +225,9 @@ class BrokerStreamWorker(QThread):
         if self._processor_thread and self._processor_thread.is_alive():
             self._processor_thread.join(timeout=1.0)
 
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=1.0)
+
         self.connection_status.emit("DISCONNECTED", "Stream terminated by user")
 
     # =========================================================================
@@ -173,42 +236,70 @@ class BrokerStreamWorker(QThread):
 
     def run(self) -> None:
         """
-        Worker thread main event loop.
-        Authenticates against broker REST gateway and opens streaming connection.
-        Zero-Fake-Data: if authentication fails or socket disconnects, halts cleanly.
+        Worker thread main event loop with auto-healing and exponential backoff.
+        Zero-Fake-Data: if authentication fails and auto-reconnect is disabled, halts cleanly.
+        During network hiccups, automatically retries without popping blocking UI dialogs.
         """
-        self.connection_status.emit("CONNECTING", f"Initiating session with {self.broker_name}...")
+        reconnect_attempts = 0
+        backoff_sec = self._reconnect_backoff_sec
 
-        # 1. Authenticate using Phase 2 credentials
-        try:
-            adapter = get_broker_adapter(self.broker_name)
-            auth_res = adapter.authenticate()
-        except Exception as exc:
-            self.connection_status.emit("ERROR", f"Adapter initialization failed: {str(exc)}")
-            self.connection_status.emit("DISCONNECTED", "Authentication aborted")
-            self._is_running = False
-            return
+        while self._is_running:
+            self.connection_status.emit("CONNECTING", f"Initiating session with {self.broker_name}...")
 
-        if not auth_res.get("status"):
-            error_msg = auth_res.get("message", "Broker authentication rejected.")
-            self.connection_status.emit("ERROR", f"Auth Failure: {error_msg}")
-            self.connection_status.emit("DISCONNECTED", "Session aborted due to failed credentials")
-            self._is_running = False
-            return
+            # 1. Authenticate using Phase 2 credentials
+            try:
+                adapter = get_broker_adapter(self.broker_name)
+                auth_res = adapter.authenticate()
+            except Exception as exc:
+                self.connection_status.emit("ERROR", f"Adapter initialization failed: {str(exc)}")
+                if not self._auto_reconnect_enabled:
+                    self.connection_status.emit("DISCONNECTED", "Authentication aborted")
+                    self._is_running = False
+                    return
+                reconnect_attempts += 1
+                time.sleep(backoff_sec)
+                backoff_sec = min(self._max_backoff_sec, backoff_sec * 2.0)
+                continue
 
-        feed_token = auth_res.get("feed_token", "")
-        client_id = auth_res.get("client_id", "")
-        self.connection_status.emit("CONNECTED", f"Session authenticated for {client_id}. Connecting live stream...")
+            if not auth_res.get("status"):
+                error_msg = auth_res.get("message", "Broker authentication rejected.")
+                self.connection_status.emit("ERROR", f"Auth Failure: {error_msg}")
+                if not self._auto_reconnect_enabled:
+                    self.connection_status.emit("DISCONNECTED", "Session aborted due to failed credentials")
+                    self._is_running = False
+                    return
+                reconnect_attempts += 1
+                time.sleep(backoff_sec)
+                backoff_sec = min(self._max_backoff_sec, backoff_sec * 2.0)
+                continue
 
-        # 2. Run WebSocket stream client
-        if self.broker_name == "ANGEL_ONE":
-            self._run_angel_websocket(client_id, feed_token)
-        elif self.broker_name == "SHOONYA":
-            self._run_shoonya_websocket(client_id, feed_token)
-        else:
-            self.connection_status.emit("ERROR", f"Unsupported broker streaming protocol: {self.broker_name}")
-            self.connection_status.emit("DISCONNECTED", "Stream halted")
-            self._is_running = False
+            feed_token = auth_res.get("feed_token", "")
+            client_id = auth_res.get("client_id", "")
+            self.connection_status.emit("CONNECTED", f"Session authenticated for {client_id}. Connecting live stream...")
+            backoff_sec = 0.5  # Reset backoff on successful connection
+
+            # 2. Run WebSocket stream client
+            if self.broker_name == "ANGEL_ONE":
+                self._run_angel_websocket(client_id, feed_token)
+            elif self.broker_name == "SHOONYA":
+                self._run_shoonya_websocket(client_id, feed_token)
+            else:
+                self.connection_status.emit("ERROR", f"Unsupported broker streaming protocol: {self.broker_name}")
+                self.connection_status.emit("DISCONNECTED", "Stream halted")
+                self._is_running = False
+                break
+
+            if not self._is_running or not self._auto_reconnect_enabled:
+                break
+
+            reconnect_attempts += 1
+            self.connection_status.emit(
+                "RECONNECTING",
+                f"WebSocket connection dropped. Auto-reconnecting in {backoff_sec:.1f}s (attempt {reconnect_attempts})..."
+            )
+            time.sleep(backoff_sec)
+            backoff_sec = min(self._max_backoff_sec, backoff_sec * 2.0)
+
 
     # =========================================================================
     # Native Protocol Parsers
@@ -361,6 +452,9 @@ class BrokerStreamWorker(QThread):
             if isinstance(message, bytes):
                 parsed = self.parse_angel_binary_packet(message)
                 if parsed and parsed["ltp"] > 0.0:
+                    self._latest_ticks[parsed["symbol"]] = parsed
+                    BrokerStreamWorker.update_tick_cache(parsed["symbol"], parsed)
+                    self._last_heartbeat_time = time.time()
                     try:
                         # Non-blocking enqueue with obsolete tick dropping
                         self._tick_queue.put_nowait(parsed)
@@ -417,7 +511,8 @@ class BrokerStreamWorker(QThread):
         except Exception as exc:
             self.connection_status.emit("ERROR", f"Run forever failed: {str(exc)}")
         finally:
-            self._is_running = False
+            if not self._auto_reconnect_enabled:
+                self._is_running = False
 
     def _run_shoonya_websocket(self, client_id: str, susertoken: str) -> None:
         """Connects to Shoonya Noren WebSocket and streams JSON tick packets."""
@@ -435,6 +530,9 @@ class BrokerStreamWorker(QThread):
 
             parsed = self.parse_shoonya_json_packet(message)
             if parsed and parsed["ltp"] > 0.0:
+                self._latest_ticks[parsed["symbol"]] = parsed
+                BrokerStreamWorker.update_tick_cache(parsed["symbol"], parsed)
+                self._last_heartbeat_time = time.time()
                 try:
                     # Non-blocking enqueue with obsolete tick dropping
                     self._tick_queue.put_nowait(parsed)
@@ -486,5 +584,6 @@ class BrokerStreamWorker(QThread):
         except Exception as exc:
             self.connection_status.emit("ERROR", f"Shoonya run_forever failed: {str(exc)}")
         finally:
-            self._is_running = False
+            if not self._auto_reconnect_enabled:
+                self._is_running = False
 

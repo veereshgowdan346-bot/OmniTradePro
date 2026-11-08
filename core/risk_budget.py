@@ -23,6 +23,54 @@ class RiskBudget:
     MIN_GROSS_PROFIT_TRIGGER_INR = 70.0
     MIN_NET_PROFIT_HURDLE_INR = 10.0
     MAX_CAPITAL_RISK_RATIO = 0.10  # 10% floor
+    MAX_SLIPPAGE_PCT = 0.0008      # 0.08% / 8 bps dynamic slippage guardrail
+
+    @classmethod
+    def calculate_marketable_limit_price(
+        cls,
+        price: float,
+        side: str,
+        max_slippage_pct: float = 0.0008
+    ) -> float:
+        """
+        Calculates marketable limit price to guard against execution slippage and flash crashes.
+        BUY: price * (1 + max_slippage_pct)
+        SELL: price * (1 - max_slippage_pct)
+        """
+        if price <= 0.0:
+            return 0.0
+        normalized_side = str(side).strip().upper()
+        if normalized_side == "BUY":
+            return round(price * (1.0 + max_slippage_pct), 2)
+        else:
+            return round(price * (1.0 - max_slippage_pct), 2)
+
+    @classmethod
+    def is_slippage_acceptable(
+        cls,
+        requested_price: float,
+        current_price: float,
+        side: str,
+        max_slippage_pct: float = 0.0008
+    ) -> tuple[bool, float]:
+        """
+        Verifies if price drift between signal generation and routing is within the 0.08% boundary.
+        Returns: (is_acceptable: bool, drift_pct: float)
+        """
+        if requested_price <= 0.0 or current_price <= 0.0:
+            return False, 1.0
+
+        normalized_side = str(side).strip().upper()
+        if normalized_side == "BUY":
+            drift = (current_price - requested_price) / requested_price
+        else:  # SELL / SHORT
+            drift = (requested_price - current_price) / requested_price
+
+        # Adverse drift check (favorable drift is always acceptable)
+        if drift > max_slippage_pct:
+            return False, round(drift, 6)
+        return True, round(drift, 6)
+
 
     @classmethod
     def calculate_position_size(
