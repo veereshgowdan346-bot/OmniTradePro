@@ -76,6 +76,7 @@ class AngelOneAdapter:
                     "broker": "ANGEL_ONE",
                     "feed_token": feed_token,
                     "jwt_token": jwt_token,
+                    "api_key": "***REDACTED***",  # SECURITY: Masked for logging safety
                     "client_id": cid,
                     "message": "Authenticated successfully via SmartConnect"
                 }
@@ -116,11 +117,13 @@ class AngelOneAdapter:
                     data = resp_json.get("data", {})
                     jwt_token = data.get("jwtToken", "")
                     feed_token = data.get("feedToken", "")
+                    # SECURITY: Do not return raw api_key - mask in response
                     return {
                         "status": True,
                         "broker": "ANGEL_ONE",
                         "feed_token": feed_token,
                         "jwt_token": jwt_token,
+                        "api_key": "***REDACTED***",  # SECURITY: Masked for logging safety
                         "client_id": cid,
                         "message": "Authenticated successfully via Angel One REST Gateway"
                     }

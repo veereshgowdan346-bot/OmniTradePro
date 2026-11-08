@@ -183,27 +183,28 @@ class HeaderTopBar(QFrame):
         layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(10)
 
-        # 1. Brand Logo / Avatar
-        head_path = ASSETS_DIR / "robot_head.png"
-        self.avatar_lbl = QLabel(self)
-        try:
-            if head_path.exists():
-                pix = QPixmap(str(head_path)).scaled(38, 38, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.avatar_lbl.setPixmap(pix)
-            else:
-                self.avatar_lbl.setText("🤖")
-                self.avatar_lbl.setStyleSheet("font-size: 26px;")
-        except Exception:
-            self.avatar_lbl.setText("🤖")
+        # 1. Brand Logo / Badge
+        self.avatar_lbl = QLabel("⚡", self)
+        self.avatar_lbl.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 240, 255, 0.12);
+                border: 1.5px solid #00f0ff;
+                border-radius: 8px;
+                color: #00f0ff;
+                font-size: 20px;
+                font-weight: 900;
+                padding: 3px 9px;
+            }
+        """)
         layout.addWidget(self.avatar_lbl)
 
         # Brand Title & Subtitle
         brand_box = QVBoxLayout()
         brand_box.setSpacing(1)
-        title_lbl = QLabel("Chintu AI Trading Board <span style='color:#00e676; font-weight:800;'>v5.0</span>", self)
+        title_lbl = QLabel("OmniTradePro <span style='color:#00f0ff; font-weight:800;'>v5.0</span>", self)
         title_lbl.setStyleSheet("color: #ffffff; font-size: 15px; font-weight: 800; letter-spacing: 0.5px;")
 
-        sub_lbl = QLabel("AI Trading • Algo Trading • Auto Trade • Indian Market", self)
+        sub_lbl = QLabel("Institutional Multi-Broker Algorithmic Execution Platform", self)
         sub_lbl.setStyleSheet("color: #78909c; font-size: 10px; font-weight: 500;")
 
         brand_box.addWidget(title_lbl)
@@ -316,13 +317,19 @@ class HeaderTopBar(QFrame):
             pass
         layout.addWidget(self.btn_kill)
 
-    def update_ticker(self, name: str, price: float, chg_pct: float) -> None:
+    def update_ticker(self, name: str, price: float, chg_pct: float = 0.0) -> None:
         """Updates ticker card with genuine exchange numbers."""
-        if name in self.ticker_widgets:
+        norm_name = name.strip().upper()
+        target_key = None
+        for key in self.ticker_widgets:
+            if key == norm_name or key.replace(" ", "") == norm_name.replace(" ", ""):
+                target_key = key
+                break
+        if target_key:
             col = "#00e676" if chg_pct >= 0 else "#ff1744"
             sign = "+" if chg_pct >= 0 else ""
             arrow = "▲" if chg_pct >= 0 else "▼"
-            self.ticker_widgets[name].setText(
+            self.ticker_widgets[target_key].setText(
                 f"{price:,.2f} <span style='color:{col}; font-size:10px; font-weight:bold;'>{arrow} {sign}{chg_pct:.2f}%</span>"
             )
 
@@ -342,7 +349,7 @@ class SubHeaderNavBar(QWidget):
             ("⚡ Trade", 1),
             ("📋 Positions", 8),
             ("📜 Orders", 10),
-            ("🤖 Bots", 2),
+            ("⚙ Bots", 2),
             ("📊 Analytics", 7),
             ("📄 Reports", 10)
         ]
@@ -386,7 +393,7 @@ class LeftSidebar(QFrame):
     NAV_ITEMS = [
         "⊞ Dashboard",
         "📈 Live Trading",
-        "🤖 Trading Bots",
+        "⚙ Trading Bots",
         "⚙ Strategies",
         "👁 Market Watch",
         "⚡ Auto Trade",
@@ -429,20 +436,32 @@ class LeftSidebar(QFrame):
 
         layout.addStretch()
 
-        # 3D Robot Mascot (Bottom)
-        mascot_path = ASSETS_DIR / "robot_mascot.png"
+        # Clean Institutional Executive System Badge
+        brand_card = QFrame(self)
+        brand_card.setStyleSheet("""
+            QFrame {
+                background-color: #0b1424;
+                border: 1px solid #142236;
+                border-radius: 8px;
+                padding: 6px;
+            }
+        """)
+        bc_layout = QVBoxLayout(brand_card)
+        bc_layout.setContentsMargins(4, 4, 4, 4)
+        bc_layout.setSpacing(2)
+        lbl_v = QLabel("⚡ OmniTradePro", brand_card)
+        lbl_v.setAlignment(Qt.AlignCenter)
+        lbl_v.setStyleSheet("color: #00f0ff; font-size: 10px; font-weight: 800;")
+        lbl_sub = QLabel("Institutional v5.0", brand_card)
+        lbl_sub.setAlignment(Qt.AlignCenter)
+        lbl_sub.setStyleSheet("color: #64748b; font-size: 9px;")
+        bc_layout.addWidget(lbl_v)
+        bc_layout.addWidget(lbl_sub)
+        layout.addWidget(brand_card)
+
+        # Invisible label for backward compatibility
         self.mascot_lbl = QLabel(self)
-        self.mascot_lbl.setAlignment(Qt.AlignCenter)
-        try:
-            if mascot_path.exists():
-                pix = QPixmap(str(mascot_path)).scaled(94, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.mascot_lbl.setPixmap(pix)
-            else:
-                self.mascot_lbl.setText("🤖")
-                self.mascot_lbl.setStyleSheet("font-size: 40px;")
-        except Exception:
-            self.mascot_lbl.setText("🤖")
-        layout.addWidget(self.mascot_lbl)
+        self.mascot_lbl.setVisible(False)
 
         # Status Pill: '● System Online'
         status_pill = QLabel("● System Online", self)
@@ -695,7 +714,7 @@ class ActiveBotsCard(QFrame):
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(6)
 
-        title = QLabel("🤖 Active Trading Bots <span style='color:#78909c;'>(Standby - 0/4 Active)</span>", self)
+        title = QLabel("⚡ Active Trading Bots <span style='color:#78909c;'>(Standby - 0/4 Active)</span>", self)
         title.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 13px;")
         layout.addWidget(title)
 
@@ -825,6 +844,15 @@ class PortfolioCard(QFrame):
         self.val_pos.setText(str(open_pos))
         ratio = int((used_margin / capital * 100)) if capital > 0 else 0
         self.pbar.setValue(min(100, ratio))
+
+    def update_rms_funds(self, rms_data: dict, open_pos: int = 0) -> None:
+        """Updates portfolio card directly from Angel One live get_rms_funds() dictionary."""
+        net = float(rms_data.get("net", 0.0))
+        avail = float(rms_data.get("availablecash", 0.0))
+        collateral = float(rms_data.get("collateral", 0.0))
+        utilized = float(rms_data.get("utilized", 0.0))
+        tot = net if net > 0 else (avail + collateral)
+        self.update_portfolio(capital=tot, used_margin=utilized, open_pos=open_pos)
 
 
 class LivePnLCard(QFrame):

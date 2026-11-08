@@ -492,3 +492,4 @@ class TradeNotifier:
             self._executor.shutdown(wait=wait)
         except Exception:
             pass
+

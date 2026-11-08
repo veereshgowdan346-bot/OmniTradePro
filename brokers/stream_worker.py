@@ -275,12 +275,20 @@ class BrokerStreamWorker(QThread):
 
             feed_token = auth_res.get("feed_token", "")
             client_id = auth_res.get("client_id", "")
+            jwt_token = auth_res.get("jwt_token", "")
+            api_key = auth_res.get("api_key", "")
+            if not api_key:
+                try:
+                    creds = adapter.db.get_broker_credentials(self.broker_name)
+                    api_key = creds.get("api_key", "")
+                except Exception:
+                    pass
             self.connection_status.emit("CONNECTED", f"Session authenticated for {client_id}. Connecting live stream...")
             backoff_sec = 0.5  # Reset backoff on successful connection
 
             # 2. Run WebSocket stream client
             if self.broker_name == "ANGEL_ONE":
-                self._run_angel_websocket(client_id, feed_token)
+                self._run_angel_websocket(client_id, feed_token, jwt_token, api_key)
             elif self.broker_name == "SHOONYA":
                 self._run_shoonya_websocket(client_id, feed_token)
             else:
@@ -429,7 +437,7 @@ class BrokerStreamWorker(QThread):
     # Internal WebSocket Execution Drivers
     # =========================================================================
 
-    def _run_angel_websocket(self, client_id: str, feed_token: str) -> None:
+    def _run_angel_websocket(self, client_id: str, feed_token: str, jwt_token: str = "", api_key: str = "") -> None:
         """Connects to Angel One SmartStream WebSocket and processes binary frames."""
         try:
             import websocket
@@ -438,8 +446,19 @@ class BrokerStreamWorker(QThread):
             self._is_running = False
             return
 
+        # Fallback for API key if not supplied
+        if not api_key:
+            try:
+                from database.vault_manager import VaultManager
+                v_creds = VaultManager().get_broker_credentials("ANGEL_ONE")
+                api_key = v_creds.get("api_key", "")
+            except Exception:
+                pass
+
+        auth_header = jwt_token if jwt_token.startswith("Bearer ") else (f"Bearer {jwt_token}" if jwt_token else feed_token)
         headers = {
-            "Authorization": feed_token,
+            "Authorization": auth_header,
+            "x-api-key": api_key,
             "x-client-code": client_id,
             "x-feed-token": feed_token
         }
@@ -476,7 +495,8 @@ class BrokerStreamWorker(QThread):
             self.connection_status.emit("DISCONNECTED", f"Socket closed ({close_status_code}): {close_msg}")
 
         def on_open(ws):
-            self.connection_status.emit("CONNECTED", f"Streaming connected for {len(self._tokens)} instruments")
+            tokens_to_sub = self._tokens if self._tokens else ["3045", "2885", "26000", "26009"]
+            self.connection_status.emit("CONNECTED", f"Streaming connected for {len(tokens_to_sub)} instruments")
             # Build binary subscription request payload
             # Format: mode 1 (LTP), token list
             sub_request = {
@@ -487,7 +507,7 @@ class BrokerStreamWorker(QThread):
                     "tokenList": [
                         {
                             "exchangeType": 1,
-                            "tokens": self._tokens if self._tokens else ["2885", "11536"]
+                            "tokens": tokens_to_sub
                         }
                     ]
                 }

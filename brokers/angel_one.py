@@ -352,6 +352,16 @@ class AngelOneBroker(BaseBroker):
     # BaseBroker Interface Implementations
     # =========================================================================
 
+    @property
+    def feed_token(self) -> str:
+        """Returns active feed token for WebSocket SmartStream consumption."""
+        return self._feed_token
+
+    @property
+    def jwt_token(self) -> str:
+        """Returns active JWT session authorization token."""
+        return self._jwt_token
+
     def get_profile(self) -> Dict[str, Any]:
         """Returns verified profile and session metadata."""
         return {
@@ -366,57 +376,108 @@ class AngelOneBroker(BaseBroker):
             "exchange_permissions": ["NSE", "BSE", "NFO", "MCX"]
         }
 
+    def get_rms_funds(self) -> Dict[str, Any]:
+        """
+        Executes real live RMS account funds query against Angel One production servers.
+        Target endpoint: /rest/secure/angelbroking/user/v1/getRMS
+        Passes required headers: Authorization, X-UserType, X-SourceID, X-ClientLocalIP,
+        X-ClientPublicIP, X-MACAddress, X-PrivateKey.
+        Extracts net (total available funds), availablecash, collateral, utiliseddebits.
+        Strictly zero synthetic or mock data.
+        """
+        if not self.is_authenticated:
+            if not self.authenticate():
+                return {
+                    "status": False,
+                    "net": 0.0,
+                    "availablecash": 0.0,
+                    "collateral": 0.0,
+                    "utilized": 0.0,
+                    "message": "Angel One broker is not authenticated."
+                }
+
+        # 1. Primary: SmartConnect rmsLimit if initialized
+        if self._smart_api:
+            try:
+                resp = self._smart_api.rmsLimit()
+                if resp and resp.get("status"):
+                    d = resp.get("data", {})
+                    net_val = float(d.get("net", 0.0) or 0.0)
+                    cash_val = float(d.get("availablecash", 0.0) or 0.0)
+                    collateral_val = float(d.get("collateral", 0.0) or 0.0)
+                    util_val = float(d.get("utiliseddebits", 0.0) or 0.0)
+                    return {
+                        "status": True,
+                        "net": net_val,
+                        "availablecash": cash_val,
+                        "collateral": collateral_val,
+                        "utilized": util_val,
+                        "data": d,
+                        "source": "SmartConnect"
+                    }
+            except Exception as exc:
+                self.logger.warning(f"SmartConnect rmsLimit query failed: {exc}")
+
+        # 2. Direct REST HTTPS request to Angel One production API
+        auth_header = self._jwt_token if self._jwt_token.startswith("Bearer ") else f"Bearer {self._jwt_token}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-UserType": "USER",
+            "X-SourceID": "WEB",
+            "X-ClientLocalIP": "127.0.0.1",
+            "X-ClientPublicIP": "106.193.147.98",
+            "X-MACAddress": "fe80::216e:6507:4b77:9985",
+            "X-PrivateKey": self._api_key,
+            "Authorization": auth_header
+        }
+
+        endpoints = [
+            ("https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS", "GET"),
+            ("https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getRMS", "POST"),
+            ("https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getRMS", "GET")
+        ]
+
+        for url, method in endpoints:
+            try:
+                req = urllib.request.Request(url, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    resp_json = json.loads(resp.read().decode("utf-8"))
+                    if resp_json.get("status"):
+                        d = resp_json.get("data", {})
+                        net_val = float(d.get("net", 0.0) or 0.0)
+                        cash_val = float(d.get("availablecash", 0.0) or 0.0)
+                        collateral_val = float(d.get("collateral", 0.0) or 0.0)
+                        util_val = float(d.get("utiliseddebits", 0.0) or 0.0)
+                        return {
+                            "status": True,
+                            "net": net_val,
+                            "availablecash": cash_val,
+                            "collateral": collateral_val,
+                            "utilized": util_val,
+                            "data": d,
+                            "source": "REST_DIRECT"
+                        }
+            except Exception:
+                continue
+
+        return {
+            "status": False,
+            "net": 0.0,
+            "availablecash": 0.0,
+            "collateral": 0.0,
+            "utilized": 0.0,
+            "message": "Failed to fetch live RMS funds from Angel One servers."
+        }
+
     def get_funds(self) -> AccountFunds:
         """Retrieves real account margins and funds from Angel One."""
-        if not self.is_authenticated:
-            return AccountFunds(
-                net_available=0.0,
-                utilized=0.0,
-                cash=0.0,
-                realized_pnl=0.0,
-                unrealized_pnl=0.0,
-                currency="INR"
-            )
-
-        try:
-            headers = {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "X-UserType": "USER",
-                "X-SourceID": "WEB",
-                "X-ClientLocalIP": "127.0.0.1",
-                "X-ClientPublicIP": "106.193.147.98",
-                "X-MACAddress": "fe80::216e:6507:4b77:9985",
-                "X-PrivateKey": self._api_key,
-                "Authorization": f"Bearer {self._jwt_token}"
-            }
-            req = urllib.request.Request(
-                "https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS",
-                headers=headers,
-                method="GET"
-            )
-            with urllib.request.urlopen(req, timeout=10.0) as resp:
-                resp_json = json.loads(resp.read().decode("utf-8"))
-                if resp_json.get("status"):
-                    d = resp_json.get("data", {})
-                    net_avail = float(d.get("net", 0.0))
-                    avail_cash = float(d.get("availablecash", 0.0))
-                    util = float(d.get("utiliseddebits", 0.0))
-                    return AccountFunds(
-                        net_available=net_avail,
-                        utilized=util,
-                        cash=avail_cash,
-                        realized_pnl=0.0,
-                        unrealized_pnl=0.0,
-                        currency="INR"
-                    )
-        except Exception:
-            pass
-
+        rms = self.get_rms_funds()
         return AccountFunds(
-            net_available=0.0,
-            utilized=0.0,
-            cash=0.0,
+            net_available=rms.get("net", 0.0),
+            utilized=rms.get("utilized", 0.0),
+            collateral=rms.get("collateral", 0.0),
+            cash=rms.get("availablecash", 0.0),
             realized_pnl=0.0,
             unrealized_pnl=0.0,
             currency="INR"

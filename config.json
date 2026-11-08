@@ -5,7 +5,8 @@
     "environment": "production",
     "theme": "glassmorphism_dark",
     "default_broker": "ANGEL_ONE",
-    "default_mode": "PAPER"
+    "default_mode": "PAPER",
+    "security_note": "Instrument tokens now loaded from environment variables (TOKEN_NIFTY, TOKEN_BANKNIFTY, etc.) or config/instrument_tokens.json"
   },
   "market_hours": {
     "equity_open": "09:15",
@@ -37,6 +38,19 @@
       "GOLDM",
       "SILVERM"
     ]
+  },
+  "instrument_tokens": {
+    "description": "SECURITY: Loaded from environment variables or config fallback",
+    "nse": {
+      "NIFTY": {"env": "TOKEN_NIFTY", "default": "26000"},
+      "BANKNIFTY": {"env": "TOKEN_BANKNIFTY", "default": "26009"},
+      "RELIANCE": {"env": "TOKEN_RELIANCE", "default": "2885"}
+    },
+    "mcx": {
+      "CRUDEOIL": {"env": "TOKEN_CRUDEOIL", "default": "236901"},
+      "GOLDM": {"env": "TOKEN_GOLDM", "default": "236902"},
+      "SILVERM": {"env": "TOKEN_SILVERM", "default": "236903"}
+    }
   }
 }
 

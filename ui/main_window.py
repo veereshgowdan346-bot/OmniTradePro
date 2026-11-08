@@ -17,6 +17,7 @@ Page 10: ReportsView (Interactive SQLite trade_audit_log ledger with ₹60 fee a
 Page 11: SettingsView (Embedded AES-256 Broker Vault & dynamic 2FA configuration)
 """
 
+import threading
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
@@ -176,7 +177,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Chintu AI Trading Board v5.0 — AI Powered Algo Trading (NSE, BSE, MCX)")
+        self.setWindowTitle("OmniTradePro — Institutional Trading Platform")
         self.resize(1380, 860)
         self.setMinimumSize(960, 620)
 
@@ -302,7 +303,7 @@ class MainWindow(QMainWindow):
             self.order_router.register_broker_instance(broker_name, inst)
 
     def _on_broker_state_changed(self, broker_name: str, new_state: str) -> None:
-        """Updates OrderRouter gateway registration and health telemetry."""
+        """Updates OrderRouter gateway registration, RMS funds, and health telemetry."""
         inst = self.broker_control.get_broker_instance(broker_name)
         if inst:
             self.order_router.register_broker_instance(broker_name, inst)
@@ -313,6 +314,20 @@ class MainWindow(QMainWindow):
                 broker_name=broker_name,
                 latency=38
             )
+            # Query authentic RMS funds from live broker
+            if broker_name == "ANGEL_ONE" and inst and hasattr(inst, "get_rms_funds"):
+                def fetch_rms():
+                    try:
+                        rms = inst.get_rms_funds()
+                        if rms.get("status"):
+                            self.portfolio_card.update_rms_funds(rms, len(self.order_router.positions))
+                    except Exception:
+                        pass
+                threading.Thread(target=fetch_rms, daemon=True, name="RMSFundsFetcher").start()
+
+            # Automatically start streaming worker if not already running
+            if not self.stream_worker.isRunning():
+                self.stream_worker.connect_stream(broker_name, ["3045", "2885", "26000", "26009"])
         elif new_state == "DISCONNECTED":
             any_conn = any(self.broker_control.is_broker_connected(b) for b in ("ANGEL_ONE", "SHOONYA", "GROWW"))
             if not any_conn:
@@ -321,6 +336,7 @@ class MainWindow(QMainWindow):
                     broker_name="DISCONNECTED",
                     latency=None
                 )
+                self.portfolio_card.update_portfolio(0.0, 0.0, len(self.order_router.positions))
 
     def _on_router_notification(self, title: str, message: str) -> None:
         """Surfaces non-blocking desktop warnings and execution alerts."""
@@ -449,7 +465,7 @@ class MainWindow(QMainWindow):
         self.chart_widget.on_tick_received(tick)
         sym = tick.get("symbol", "")
         ltp = float(tick.get("ltp", 0.0))
-        if sym in self.top_bar.ticker_widgets and ltp > 0:
+        if ltp > 0:
             self.top_bar.update_ticker(sym, ltp, 0.0)
 
     def _on_connection_status(self, status: str, msg: str) -> None:

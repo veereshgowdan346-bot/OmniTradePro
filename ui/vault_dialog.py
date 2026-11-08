@@ -164,9 +164,12 @@ class BrokerVaultWidget(QWidget):
     Unified institutional frosted glassmorphism credentials & 2FA management widget.
     Embedded in both the Sidebar Settings Page and the BrokerVaultDialog popup.
     """
+    credentials_saved = Signal(str)
+    _all_instances = []
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        BrokerVaultWidget._all_instances.append(self)
         self.db = DatabaseHandler()
         self.vault = VaultManager()
         self._current_broker: str = "ANGEL_ONE"
@@ -848,6 +851,19 @@ class BrokerVaultWidget(QWidget):
                 f"Credentials for {broker} (including 6-digit Trading PIN) successfully encrypted with AES-256 and stored in vault."
             )
             self._load_selected_broker_credentials()
+
+            # Two-way sync: auto-refresh any other active BrokerVaultWidget instances
+            for instance in list(BrokerVaultWidget._all_instances):
+                if instance is not self:
+                    try:
+                        instance._load_selected_broker_credentials()
+                        instance._load_notification_settings()
+                    except Exception:
+                        pass
+            try:
+                self.credentials_saved.emit(broker)
+            except Exception:
+                pass
         except Exception as exc:
             QMessageBox.critical(self, "Encryption Error", f"Failed to save credentials: {str(exc)}")
 
@@ -858,6 +874,12 @@ class BrokerVaultWidget(QWidget):
         if success:
             QMessageBox.information(self, "Active Gateway Updated", f"{broker} is now set as the primary market gateway.")
             self._load_selected_broker_credentials()
+            for instance in list(BrokerVaultWidget._all_instances):
+                if instance is not self:
+                    try:
+                        instance._load_selected_broker_credentials()
+                    except Exception:
+                        pass
         else:
             QMessageBox.warning(self, "Action Failed", f"Could not activate {broker}. Ensure credentials are saved first.")
 

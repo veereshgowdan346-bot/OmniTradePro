@@ -1,0 +1,25 @@
+{
+  "instrument_tokens": {
+    "NSE": {
+      "NIFTY": "26000",
+      "BANKNIFTY": "26009",
+      "RELIANCE": "2885",
+      "TCS": "11536",
+      "HDFCBANK": "1333",
+      "INFY": "1594",
+      "ICICIBANK": "4963",
+      "TATAMOTORS": "3456",
+      "SBIN": "3045",
+      "BHARTIARTL": "10604"
+    },
+    "MCX": {
+      "CRUDEOIL": "236901",
+      "GOLDM": "236902",
+      "SILVERM": "236903"
+    }
+  },
+  "security": {
+    "load_tokens_from": "environment",
+    "token_sources": ["TOKEN_NIFTY", "TOKEN_BANKNIFTY", "TOKEN_RELIANCE"]
+  }
+}

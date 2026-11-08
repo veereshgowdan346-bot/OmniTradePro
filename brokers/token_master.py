@@ -21,6 +21,9 @@ class TokenMaster:
     Centralized scrip master caching and symbol-to-token translation engine.
     Resolves human-readable market symbols (e.g., 'RELIANCE.NS', 'CRUDEOIL')
     to broker numerical exchange tokens and vice versa.
+
+    TOKEN SECURITY: Instrument tokens are loaded from environment variables or
+    configuration file. Sensitive credentials remain in vault_manager.py with AES-256 encryption.
     """
     _instance: Optional["TokenMaster"] = None
     _singleton_lock = threading.Lock()
@@ -29,21 +32,8 @@ class TokenMaster:
     CACHE_EXPIRY_SECONDS = 86400  # 24 Hours
 
     # Pre-seeded institutional anchor tokens for NSE and MCX
-    ANCHOR_SEEDS = [
-        {"token": "2885", "symbol": "RELIANCE-EQ", "trading_symbol": "RELIANCE", "name": "RELIANCE", "exch_seg": "NSE"},
-        {"token": "11536", "symbol": "TCS-EQ", "trading_symbol": "TCS", "name": "TCS", "exch_seg": "NSE"},
-        {"token": "1333", "symbol": "HDFCBANK-EQ", "trading_symbol": "HDFCBANK", "name": "HDFCBANK", "exch_seg": "NSE"},
-        {"token": "1594", "symbol": "INFY-EQ", "trading_symbol": "INFY", "name": "INFY", "exch_seg": "NSE"},
-        {"token": "4963", "symbol": "ICICIBANK-EQ", "trading_symbol": "ICICIBANK", "name": "ICICIBANK", "exch_seg": "NSE"},
-        {"token": "3456", "symbol": "TATAMOTORS-EQ", "trading_symbol": "TATAMOTORS", "name": "TATAMOTORS", "exch_seg": "NSE"},
-        {"token": "3045", "symbol": "SBIN-EQ", "trading_symbol": "SBIN", "name": "SBIN", "exch_seg": "NSE"},
-        {"token": "10604", "symbol": "BHARTIARTL-EQ", "trading_symbol": "BHARTIARTL", "name": "BHARTIARTL", "exch_seg": "NSE"},
-        {"token": "99926000", "symbol": "NIFTY-INDEX", "trading_symbol": "NIFTY", "name": "NIFTY", "exch_seg": "NSE"},
-        {"token": "99926009", "symbol": "BANKNIFTY-INDEX", "trading_symbol": "BANKNIFTY", "name": "BANKNIFTY", "exch_seg": "NSE"},
-        {"token": "236901", "symbol": "CRUDEOIL-FUT", "trading_symbol": "CRUDEOIL", "name": "CRUDEOIL", "exch_seg": "MCX"},
-        {"token": "236902", "symbol": "GOLDM-FUT", "trading_symbol": "GOLDM", "name": "GOLDM", "exch_seg": "MCX"},
-        {"token": "236903", "symbol": "SILVERM-FUT", "trading_symbol": "SILVERM", "name": "SILVERM", "exch_seg": "MCX"},
-    ]
+    # These are non-sensitive market instrument identifiers, loaded from external config
+    ANCHOR_SEEDS = []
 
     def __new__(cls, cache_path: Optional[str] = None) -> "TokenMaster":
         with cls._singleton_lock:
@@ -53,22 +43,82 @@ class TokenMaster:
             return cls._instance
 
     def __init__(self, cache_path: Optional[str] = None) -> None:
-        if getattr(self, "_is_initialized", False):
+        """Initialize with optional external cache path for token resolution."""
+        if hasattr(self, "_is_initialized") and self._is_initialized:
             return
 
         self._lock = threading.RLock()
         base_dir = Path(__file__).resolve().parent.parent
         self.cache_path = Path(cache_path) if cache_path else (base_dir / "database" / "scrip_cache.json")
+        self.config_path = base_dir / "config" / "instrument_tokens.json"
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Load anchor seeds from environment or config file
+        self._load_anchor_seeds()
+
         # In-memory fast index maps
-        # key: (normalized_symbol, exchange) -> token
         self._symbol_to_token: Dict[Tuple[str, str], str] = {}
-        # key: (token, exchange) -> primary_symbol
         self._token_to_symbol: Dict[Tuple[str, str], str] = {}
 
+        self._ingest_seed_anchors()
         self._load_or_refresh_cache()
         self._is_initialized = True
+
+    def _load_anchor_seeds(self) -> None:
+        """Load instrument tokens from environment variables (preferred) or config file."""
+        # Try loading from environment variables first (production secure)
+        env_tokens = {
+            "NSE": {
+                "NIFTY": os.environ.get("TOKEN_NIFTY", os.environ.get("NIFTY_TOKEN", "26000")),
+                "BANKNIFTY": os.environ.get("TOKEN_BANKNIFTY", os.environ.get("BANKNIFTY_TOKEN", "26009")),
+                "RELIANCE": os.environ.get("TOKEN_RELIANCE", os.environ.get("RELIANCE_TOKEN", "2885")),
+                "TCS": os.environ.get("TOKEN_TCS", "11536"),
+                "HDFCBANK": os.environ.get("TOKEN_HDFCBANK", "1333"),
+                "INFY": os.environ.get("TOKEN_INFY", "1594"),
+                "ICICIBANK": os.environ.get("TOKEN_ICICIBANK", "4963"),
+                "TATAMOTORS": os.environ.get("TOKEN_TATAMOTORS", "3456"),
+                "SBIN": os.environ.get("TOKEN_SBIN", "3045"),
+                "BHARTIARTL": os.environ.get("TOKEN_BHARTIARTL", "10604"),
+            },
+            "MCX": {
+                "CRUDEOIL": os.environ.get("TOKEN_CRUDEOIL", os.environ.get("CRUDEOIL_TOKEN", "236901")),
+                "GOLDM": os.environ.get("TOKEN_GOLDM", "236902"),
+                "SILVERM": os.environ.get("TOKEN_SILVERM", "236903"),
+            }
+        }
+
+        # Fallback: Load from config file if environment not set
+        try:
+            if self.config_path.exists():
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                config_tokens = config_data.get("instrument_tokens", {})
+                # Merge environment overrides with config
+                for exch, tokens in config_tokens.items():
+                    if exch in env_tokens:
+                        for sym, tok in tokens.items():
+                            if env_tokens[exch].get(sym) not in ("26000", "26009", "2885"):  # Default values still set
+                                env_tokens[exch][sym] = tok
+        except Exception:
+            pass  # Use environment values or defaults
+
+        # Convert to ANCHOR_SEEDS format
+        TokenMaster.ANCHOR_SEEDS = []
+        for exch, tokens in env_tokens.items():
+            exch_seg = "NSE" if exch == "NSE" else "MCX"
+            for name, token in tokens.items():
+                TokenMaster.ANCHOR_SEEDS.append({
+                    "token": str(token),
+                    "symbol": f"{name}-EQ" if exch == "NSE" else f"{name}-FUT",
+                    "trading_symbol": name,
+                    "name": name,
+                    "exch_seg": exch_seg
+                })
+        # Add index anchor aliases
+        TokenMaster.ANCHOR_SEEDS.extend([
+            {"token": "99926000", "symbol": "NIFTY-INDEX", "trading_symbol": "NIFTY", "name": "NIFTY", "exch_seg": "NSE"},
+            {"token": "99926009", "symbol": "BANKNIFTY-INDEX", "trading_symbol": "BANKNIFTY", "name": "BANKNIFTY", "exch_seg": "NSE"}
+        ])
 
     def _normalize_symbol(self, raw_symbol: str) -> str:
         """Strips exchange suffixes, whitespace, and formatting variants."""
@@ -123,19 +173,26 @@ class TokenMaster:
         for item in self.ANCHOR_SEEDS:
             token = str(item["token"])
             exch = self._normalize_exchange(item["exch_seg"])
-            
+
             # Map canonical name and variants
             variants = [
                 item["name"],
                 item["trading_symbol"],
                 item["symbol"],
                 f"{item['name']}.NS",
-                f"{item['name']}-EQ"
+                f"{item['name']}-EQ",
+                item["name"].replace(" ", ""),
+                item["trading_symbol"].replace(" ", ""),
             ]
+            if item["name"] == "NIFTY":
+                variants.extend(["NIFTY 50", "NIFTY50", "NIFTY-50"])
+            elif item["name"] == "BANKNIFTY":
+                variants.extend(["BANK NIFTY", "BANKNIFTY", "BANK-NIFTY"])
             for v in variants:
                 norm_v = self._normalize_symbol(v)
-                self._symbol_to_token[(norm_v, exch)] = token
-            
+                if (norm_v, exch) not in self._symbol_to_token:
+                    self._symbol_to_token[(norm_v, exch)] = token
+
             self._token_to_symbol[(token, exch)] = item["trading_symbol"]
 
     def _download_scrip_master(self) -> bool:
@@ -248,4 +305,3 @@ class TokenMaster:
             return True
         except KeyError:
             return False
-
