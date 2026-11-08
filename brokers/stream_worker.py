@@ -11,6 +11,8 @@ import sys
 import json
 import struct
 import time
+import queue
+import threading
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
@@ -92,6 +94,26 @@ class BrokerStreamWorker(QThread):
         self._ws = None
         self._token_master = TokenMaster()
 
+        # High-performance decoupled tick queue
+        self._tick_queue = queue.Queue(maxsize=10000)
+        self._processor_thread: Optional[threading.Thread] = None
+
+    def _process_ticks_loop(self) -> None:
+        """
+        Background worker thread dedicated to draining the tick queue.
+        Maintains sub-200ms latency by decoupling ingestion from signal emission.
+        """
+        while self._is_running:
+            try:
+                # Block for 500ms to allow responsive shutdown
+                tick = self._tick_queue.get(timeout=0.5)
+                self.tick_received.emit(tick)
+                self._tick_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception:
+                pass
+
     # =========================================================================
     # Public Stream Controls
     # =========================================================================
@@ -116,6 +138,11 @@ class BrokerStreamWorker(QThread):
                 pass
 
         self._is_running = True
+
+        # Start the decoupled processing worker
+        self._processor_thread = threading.Thread(target=self._process_ticks_loop, daemon=True)
+        self._processor_thread.start()
+
         self.start()
 
     def disconnect_stream(self) -> None:
@@ -134,6 +161,10 @@ class BrokerStreamWorker(QThread):
 
         self.quit()
         self.wait(1500)
+
+        if self._processor_thread and self._processor_thread.is_alive():
+            self._processor_thread.join(timeout=1.0)
+
         self.connection_status.emit("DISCONNECTED", "Stream terminated by user")
 
     # =========================================================================
@@ -330,7 +361,16 @@ class BrokerStreamWorker(QThread):
             if isinstance(message, bytes):
                 parsed = self.parse_angel_binary_packet(message)
                 if parsed and parsed["ltp"] > 0.0:
-                    self.tick_received.emit(parsed)
+                    try:
+                        # Non-blocking enqueue with obsolete tick dropping
+                        self._tick_queue.put_nowait(parsed)
+                    except queue.Full:
+                        # Drop oldest tick if queue is backpressured
+                        try:
+                            self._tick_queue.get_nowait()
+                            self._tick_queue.put_nowait(parsed)
+                        except Exception:
+                            pass
                     self.raw_packet_debug.emit(f"ANGEL TICK: {parsed['symbol']} = ₹{parsed['ltp']}")
             elif isinstance(message, str):
                 self.raw_packet_debug.emit(f"ANGEL TXT: {message[:120]}")
@@ -395,7 +435,16 @@ class BrokerStreamWorker(QThread):
 
             parsed = self.parse_shoonya_json_packet(message)
             if parsed and parsed["ltp"] > 0.0:
-                self.tick_received.emit(parsed)
+                try:
+                    # Non-blocking enqueue with obsolete tick dropping
+                    self._tick_queue.put_nowait(parsed)
+                except queue.Full:
+                    # Drop oldest tick if queue is backpressured
+                    try:
+                        self._tick_queue.get_nowait()
+                        self._tick_queue.put_nowait(parsed)
+                    except Exception:
+                        pass
                 self.raw_packet_debug.emit(f"SHOONYA TICK: {parsed['symbol']} = ₹{parsed['ltp']}")
 
         def on_error(ws, error):

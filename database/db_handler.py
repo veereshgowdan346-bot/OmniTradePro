@@ -128,6 +128,10 @@ class DatabaseHandler:
             
         return self._thread_local.connection
 
+    def get_connection(self) -> sqlite3.Connection:
+        """Public thread-isolated connection accessor."""
+        return self._get_connection()
+
     # =========================================================================
     # Schema Architecture
     # =========================================================================

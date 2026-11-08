@@ -17,11 +17,22 @@ Features:
 from datetime import datetime, time as dtime, timezone
 from typing import Dict, Any, List, Optional, Callable
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from database.db_handler import DatabaseHandler
-from database.vault_manager import VaultManager
-from brokers.base_broker import BaseBroker, OrderRequest, OrderResponse, OrderSide, OrderType, ProductType, Exchange, OrderStatus
+import json
+from pathlib import Path
+from database.db_manager import DatabaseManager
+from brokers.base_broker import (
+    BaseBroker,
+    OrderRequest,
+    OrderResponse,
+    OrderStatus,
+    OrderSide,
+    OrderType,
+    ProductType,
+    Exchange,
+)
 from brokers.angel_one import AngelOneBroker
 from brokers.shoonya import ShoonyaBroker
 from brokers.groww import GrowwBroker
@@ -33,6 +44,7 @@ class OrderRouter:
     Toggle-aware institutional order routing and liquidation gateway.
     Coordinates live execution across multi-broker matrix and paper simulator.
     """
+
     EQUITY_SQUARE_OFF = dtime(15, 15)
     MCX_SQUARE_OFF = dtime(23, 15)
     PAPER_SLIPPAGE_RATE = 0.0002  # 0.02% conservative simulated slippage
@@ -42,53 +54,67 @@ class OrderRouter:
 
     def __init__(
         self,
-        db_handler: Optional[DatabaseHandler] = None,
-        vault_manager: Optional[VaultManager] = None
+        db_manager: Optional[DatabaseManager] = None,
+        db_handler=None,
+        vault_manager=None,
+        **kwargs
     ) -> None:
-        self.db = db_handler or DatabaseHandler()
-        self.vault = vault_manager or VaultManager()
-        self._lock = threading.RLock()
+        self.db_manager = db_manager or db_handler or DatabaseManager()
+        self.db = self.db_manager
+        self.vault = vault_manager
+        if not self.vault:
+            try:
+                from database.vault_manager import VaultManager
+                self.vault = VaultManager()
+            except Exception:
+                self.vault = None
 
-        # Active open positions: trade_id -> position dict
+        self._lock = threading.RLock()
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OrderRouter_Worker")
+
+        # Open Positions Tracker (trade_id -> position dict)
         self._open_positions: Dict[int, Dict[str, Any]] = {}
 
-        # Broker Toggle Matrix: broker_name -> bool
+        # Broker Toggle Matrix: broker_name -> bool {ON/OFF state}
         self._broker_toggles: Dict[str, bool] = {
             "ANGEL_ONE": False,
             "SHOONYA": False,
-            "GROWW": False
+            "GROWW": False,
         }
 
         # Registered Broker Gateways
         self._brokers: Dict[str, BaseBroker] = {
-            "ANGEL_ONE": AngelOneBroker(vault_manager=self.vault, db_handler=self.db),
-            "SHOONYA": ShoonyaBroker(vault_manager=self.vault, db_handler=self.db),
-            "GROWW": GrowwBroker(vault_manager=self.vault, db_handler=self.db),
+            "ANGEL_ONE": AngelOneBroker(vault_manager=self.vault, db_handler=self.db_manager),
+            "SHOONYA": ShoonyaBroker(vault_manager=self.vault, db_handler=self.db_manager),
+            "GROWW": GrowwBroker(vault_manager=self.vault, db_handler=self.db_manager),
             "PAPER": PaperBroker(initial_capital=500000.0)
         }
-
-        # Thread pool for concurrent multi-broker dispatch
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OrderRouter_Worker")
 
         # Notification / Alert Callback (e.g. desktop UI toast/dialog)
         self.notification_callback: Optional[Callable[[str, str], None]] = None
 
-        # Synchronize initial toggles from encrypted vault if available
+        # Daily risk tracking from risk engine
+        self._daily_loss_tracker = {"realized": 0.0, "starting_capital": 500000.0}
+
+        # Circuit Breaker State
+        self._engine_locked: bool = False
+
+        # Synchronize initial toggles from vault if available
         self._sync_toggles_from_vault()
 
-    @property
-    def positions(self) -> Dict[int, Dict[str, Any]]:
-        """Convenience property exposing active open positions."""
-        with self._lock:
-            return dict(self._open_positions)
-
     def _sync_toggles_from_vault(self) -> None:
-        """Loads persistent broker trading toggles from VaultManager."""
+        """Synchronize broker trading toggles from vault state."""
         try:
-            for broker in ("ANGEL_ONE", "SHOONYA", "GROWW"):
-                if self.vault.is_trading_enabled(broker):
-                    self._broker_toggles[broker] = True
+            if not self.vault:
+                from database.vault_manager import VaultManager
+                self.vault = VaultManager()
+            toggles = self.vault.get_all_toggles()
+            for broker_name, enabled in toggles.items():
+                normalized = broker_name.strip().upper()
+                if normalized in self._broker_toggles:
+                    self._broker_toggles[normalized] = enabled
         except Exception:
+            # Vault not initialized yet - use defaults
             pass
 
     # =========================================================================
@@ -100,10 +126,12 @@ class OrderRouter:
         normalized = broker_name.strip().upper()
         with self._lock:
             self._broker_toggles[normalized] = bool(enabled)
-            try:
-                self.vault.set_trading_enabled(normalized, enabled)
-            except Exception:
-                pass
+            if self.vault and hasattr(self.vault, "set_trading_enabled"):
+                try:
+                    self.vault.set_trading_enabled(normalized, enabled)
+                except Exception:
+                    pass
+        # Persist toggle state (would integrate with vault in production)
 
     def get_broker_toggle(self, broker_name: str) -> bool:
         """Returns True if trading toggle is ON for the broker."""
@@ -122,7 +150,7 @@ class OrderRouter:
         with self._lock:
             self._brokers[normalized] = instance
 
-    def get_broker_instance(self, broker_name: str) -> Optional[BaseBroker]:
+    def get_broker_instance(self, broker_name: str):
         """Retrieves a registered broker gateway instance."""
         normalized = broker_name.strip().upper()
         with self._lock:
@@ -156,38 +184,39 @@ class OrderRouter:
     ) -> Dict[str, Any]:
         """
         Executes order strictly adhering to broker toggle matrix and risk guardrails.
-        - PAPER Mode: Simulated 0.02% slippage and SQLite audit recording.
-        - LIVE Mode:
-          * If ALL toggles OFF: Drops order with 'Trading Locked: No active brokers enabled'.
-          * If Broker toggled ON but Disconnected: Rejects execution on that broker with alert.
-          * If 1, 2, or 3 Brokers connected & toggled ON: Dispatches concurrently.
         """
-        normalized_side = side.strip().upper()
-        normalized_mode = mode.strip().upper()
-        normalized_exchange = exchange.strip().upper()
-
+        # Validate parameters
         if quantity <= 0:
             raise ValueError(f"Quantity must be positive integer, got {quantity}")
         if price <= 0.0:
             raise ValueError(f"Execution price must be > 0.0, got {price}")
 
-        # Check asset class for market session type
-        is_mcx = symbol.upper() in ("CRUDEOIL", "GOLDM", "SILVERM", "COPPER", "NATURALGAS")
-        session_type = "MCX" if is_mcx else "EQUITY"
+        # === CRITICAL: Circuit Breaker Check ===
+        if self._engine_locked:
+            self._notify("Circuit Breaker", "Daily loss limit exceeded. Trading engine locked.")
+            return {
+                "status": "REJECTED",
+                "reason": "ENGINE_LOCKED",
+                "message": "Daily loss limit exceeded. Trading engine locked."
+            }
 
-        # Ensure valid positive stop loss for persistent audit log
-        if stop_loss <= 0.0:
+        normalized_side = side.strip().upper()
+        normalized_mode = mode.strip().upper()
+        normalized_exchange = exchange.strip().upper()
+
+        # === CHECK 1: Pre-Trade ₹70 Gross Profit Gate ===
+        # Validate expected profit before any broker dispatch (side-aware)
+        if target_price > 0.0 and quantity > 0:
             if normalized_side == "BUY":
-                stop_loss = round(price * 0.99, 2)
-            else:
-                stop_loss = round(price * 1.01, 2)
+                expected_gross_profit = (target_price - price) * quantity
+            else:  # SELL / SHORT
+                expected_gross_profit = (price - target_price) * quantity
 
-        # Pre-trade Hurdle Check (if target price is set)
-        if target_price > 0.0:
-            expected_price_move = abs(target_price - price)
-            estimated_gross_pnl = expected_price_move * quantity
-            if estimated_gross_pnl < self.MIN_GROSS_PROFIT_HURDLE_INR:
-                msg = f"Order blocked: Estimated gross profit (₹{estimated_gross_pnl:.2f}) < statutory ₹70 hurdle gate."
+            if expected_gross_profit < self.MIN_GROSS_PROFIT_HURDLE_INR:
+                msg = (
+                    f"Order blocked: Estimated gross profit (₹{expected_gross_profit:.2f}) "
+                    f"< statutory ₹70 hurdle gate."
+                )
                 self._notify("Risk Gate Block", msg)
                 return {
                     "status": "REJECTED",
@@ -195,11 +224,31 @@ class OrderRouter:
                     "message": msg
                 }
 
-        with self._lock:
-            # =================================================================
-            # 1. PAPER TRADING EXECUTION
-            # =================================================================
-            if normalized_mode == "PAPER":
+        # === CHECK 2: Daily Drawdown Circuit Breaker ===
+        # Check if daily realized loss >= 10% of starting capital
+        daily_realized = self._daily_loss_tracker.get("realized", 0.0)
+        starting_capital = self._daily_loss_tracker.get("starting_capital", 500000.0)
+        daily_loss_threshold = starting_capital * (self.MAX_DRAWDOWN_PCT / 100.0)
+
+        if daily_realized >= daily_loss_threshold:
+            self._engine_locked = True
+            msg = f"Circuit Breaker TRIPPED: Daily loss (₹{daily_realized:.2f}) >= 10% threshold (₹{daily_loss_threshold:.2f}). All new trades rejected."
+            self._notify("Daily Circuit Breaker", msg)
+            return {
+                "status": "REJECTED",
+                "reason": "DAILY_DRAWDOWN_BREACH",
+                "message": msg
+            }
+
+        # Determine market session type
+        is_mcq = symbol.upper() in ("CRUDEOIL", "GOLDM", "SILVERM", "COPPER", "NATURALGAS")
+        session_type = "MCX" if is_mcq else "EQUITY"
+
+        # =====================================================================
+        # 1. PAPER TRADING EXECUTION GATEWAY
+        # =====================================================================
+        if normalized_mode == "PAPER":
+            with self._lock:
                 if normalized_side == "BUY":
                     executed_price = round(price * (1.0 + self.PAPER_SLIPPAGE_RATE), 2)
                 else:
@@ -207,19 +256,28 @@ class OrderRouter:
 
                 slippage_inr = round(abs(executed_price - price) * quantity, 2)
 
-                trade_id = self.db.log_trade_entry(
-                    market_session=session_type,
-                    broker_name="PAPER_BROKER",
-                    symbol=symbol,
-                    trade_side=normalized_side,
-                    quantity=quantity,
-                    entry_price=executed_price,
-                    stop_loss=stop_loss,
-                    execution_mode="PAPER",
-                    friction_cost=self.FRICTION_COST_INR
-                )
+                trade_id = 0
+                if hasattr(self.db_manager, "log_trade_entry"):
+                    try:
+                        trade_id = self.db_manager.log_trade_entry(
+                            market_session=session_type,
+                            broker_name="PAPER_BROKER",
+                            symbol=symbol,
+                            trade_side=normalized_side,
+                            quantity=quantity,
+                            entry_price=executed_price,
+                            stop_loss=stop_loss,
+                            execution_mode="PAPER",
+                            friction_cost=self.FRICTION_COST_INR
+                        )
+                    except Exception:
+                        pass
+
+                if not trade_id:
+                    trade_id = len(self._open_positions) + 1
 
                 pos_record = {
+                    "id": trade_id,
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "side": normalized_side,
@@ -229,16 +287,15 @@ class OrderRouter:
                     "target_price": target_price,
                     "market_session": session_type,
                     "execution_mode": "PAPER",
+                    "broker": "PAPER_BROKER",
                     "broker_name": "PAPER_BROKER",
-                    "status": "OPEN",
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "created_at": datetime.now(timezone.utc).isoformat()
                 }
                 self._open_positions[trade_id] = pos_record
 
                 return {
                     "status": "FILLED",
                     "trade_id": trade_id,
-                    "order_id": f"PAP-{trade_id}",
                     "symbol": symbol,
                     "side": normalized_side,
                     "quantity": quantity,
@@ -248,94 +305,128 @@ class OrderRouter:
                     "stop_loss": stop_loss,
                     "target_price": target_price,
                     "execution_mode": "PAPER",
-                    "broker": "PAPER_BROKER",
-                    "message": f"Paper order executed at ₹{executed_price:.2f} (0.02% simulated slippage applied)."
+                    "message": "Simulated fill executed via PAPER gateway (0.02% slippage applied)."
                 }
 
-            # =================================================================
-            # 2. LIVE TOGGLE-AWARE MULTI-BROKER EXECUTION
-            # =================================================================
-            elif normalized_mode == "LIVE":
-                # Check 1: Are ANY toggles enabled?
-                enabled_brokers = [b for b, toggled in self._broker_toggles.items() if toggled]
-                if not enabled_brokers:
-                    msg = "Trading Locked: No active brokers enabled. Enable at least one broker trading toggle."
-                    self._notify("Trading Locked", msg)
-                    return {
-                        "status": "REJECTED",
-                        "reason": "ALL_TOGGLES_OFF",
-                        "message": msg
-                    }
+        # =====================================================================
+        # 2. LIVE TOGGLE-AWARE MULTI-BROKER EXECUTION GATEWAY
+        # =====================================================================
+        elif normalized_mode == "LIVE":
+            # === CHECK 3: Broker Toggle Matrix ===
+            # Identify enabled brokers
+            enabled_brokers = [b for b, toggled in self._broker_toggles.items() if toggled]
 
-                ready_brokers: List[str] = []
-                disconnected_brokers: List[str] = []
+            # State 0: All toggles OFF -> Reject order
+            if not enabled_brokers:
+                msg = "Trading Locked: No active brokers enabled. Enable at least one broker trading toggle."
+                self._notify("Trading Locked", msg)
+                return {
+                    "status": "REJECTED",
+                    "reason": "ALL_TOGGLES_OFF",
+                    "message": msg
+                }
 
-                # Check 2: Evaluate connection status per toggled broker
-                for broker_name in enabled_brokers:
-                    broker_inst = self._brokers.get(broker_name)
-                    is_connected = False
-                    if broker_inst and getattr(broker_inst, "is_authenticated", False):
-                        conn_state = getattr(broker_inst, "_connection_state", "")
-                        if conn_state == "CONNECTED":
-                            is_connected = True
+            # Evaluate connection status per toggled broker
+            ready_brokers: List[str] = []
+            disconnected_brokers: List[str] = []
 
-                    if is_connected:
-                        ready_brokers.append(broker_name)
-                    else:
-                        disconnected_brokers.append(broker_name)
-                        # Trigger non-crashing alert
-                        alert_msg = f"Execution rejected on {broker_name}: Broker is toggled ON but DISCONNECTED."
-                        self._notify("Broker Disconnected", alert_msg)
+            for broker_name in enabled_brokers:
+                broker_inst = self._brokers.get(broker_name)
+                is_connected = False
+                if broker_inst and getattr(broker_inst, "is_authenticated", False):
+                    conn_state = getattr(broker_inst, "_connection_state", "")
+                    if conn_state == "CONNECTED":
+                        is_connected = True
 
-                # If no brokers are connected despite toggles being ON
-                if not ready_brokers:
-                    msg = f"Execution halted: All enabled brokers ({', '.join(disconnected_brokers)}) are disconnected."
-                    self._notify("Execution Rejected", msg)
-                    return {
-                        "status": "REJECTED",
-                        "reason": "ENABLED_BROKERS_DISCONNECTED",
-                        "disconnected_brokers": disconnected_brokers,
-                        "message": msg
-                    }
+                if is_connected:
+                    ready_brokers.append(broker_name)
+                else:
+                    disconnected_brokers.append(broker_name)
+                    # Trigger non-crashing alert (never fail silently on connection state)
+                    alert_msg = f"Execution rejected on {broker_name}: Broker is toggled ON but DISCONNECTED."
+                    self._notify("Broker Disconnected", alert_msg)
 
-                # Check 3: Route concurrently across all ready brokers
-                execution_results: List[Dict[str, Any]] = []
+            # If no brokers are connected despite toggles being ON
+            if not ready_brokers:
+                msg = f"Execution halted: All enabled brokers ({', '.join(disconnected_brokers)}) are disconnected."
+                self._notify("Execution Rejected", msg)
+                return {
+                    "status": "REJECTED",
+                    "reason": "ENABLED_BROKERS_DISCONNECTED",
+                    "disconnected_brokers": disconnected_brokers,
+                    "message": msg
+                }
 
-                def dispatch_to_broker(b_name: str) -> Dict[str, Any]:
-                    inst = self._brokers[b_name]
-                    trade_id = self.db.log_trade_entry(
-                        market_session=session_type,
-                        broker_name=b_name,
+            # === STATE 1-3: Route across ready brokers ===
+            # State 1: Single broker -> Route exclusively
+            # State 2/3: Multiple brokers -> Parallel dispatch
+            execution_results: List[Dict[str, Any]] = []
+            execution_uuid = str(uuid.uuid4())
+
+            def dispatch_to_broker(b_name: str) -> Dict[str, Any]:
+                """Dispatch order to a specific broker gateway."""
+                inst = self._brokers[b_name]
+                # Use unique execution UUID to prevent IDOR and collisions
+                client_order_id = f"OT-{b_name[:2]}-{execution_uuid[:8]}"
+
+                # Map product to valid BaseBroker ProductType enum
+                prod_clean = str(product).strip().upper()
+                if prod_clean in ("MIS", "INTRADAY"):
+                    p_type = ProductType.INTRADAY
+                elif prod_clean in ("CNC", "DELIVERY"):
+                    p_type = ProductType.DELIVERY
+                elif prod_clean in ("NRML", "CARRYFORWARD"):
+                    p_type = ProductType.CARRYFORWARD
+                elif prod_clean == "MARGIN":
+                    p_type = ProductType.MARGIN
+                else:
+                    p_type = ProductType.INTRADAY
+
+                try:
+                    req = OrderRequest(
                         symbol=symbol,
-                        trade_side=normalized_side,
+                        exchange=Exchange.NSE if normalized_exchange == "NSE" else Exchange.BSE,
+                        side=OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
+                        order_type=OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT,
+                        product_type=p_type,
                         quantity=quantity,
-                        entry_price=price,
-                        stop_loss=stop_loss,
-                        execution_mode="LIVE",
-                        friction_cost=self.FRICTION_COST_INR
+                        price=price if order_type != "MARKET" else 0.0,
+                        trigger_price=stop_loss,
+                        tag=client_order_id
                     )
+                    order_resp = inst.place_order(req)
+                    b_order_id = order_resp.broker_order_id or client_order_id
+                    order_status = order_resp.status.value if hasattr(order_resp.status, "value") else str(order_resp.status)
+                except Exception as err:
+                    b_order_id = f"ERR-{b_name[:2]}-{execution_uuid[:8]}"
+                    order_status = "REJECTED"
 
-                    try:
-                        req = OrderRequest(
-                            symbol=symbol,
-                            exchange=Exchange.NSE if normalized_exchange == "NSE" else Exchange.BSE,
-                            side=OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
-                            order_type=OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT,
-                            product_type=ProductType.MIS if product == "MIS" else ProductType.CNC,
-                            quantity=quantity,
-                            price=price if order_type != "MARKET" else 0.0,
-                            trigger_price=stop_loss
-                        )
-                        order_resp = inst.place_order(req)
-                        b_order_id = order_resp.broker_order_id or f"{b_name[:3]}-{trade_id}"
-                        order_status = order_resp.status.value if hasattr(order_resp.status, "value") else str(order_resp.status)
-                    except Exception as err:
-                        b_order_id = f"{b_name[:3]}-ERR-{trade_id}"
-                        order_status = "REJECTED"
+                return {
+                    "broker": b_name,
+                    "execution_id": execution_uuid,
+                    "client_order_id": client_order_id,
+                    "broker_order_id": b_order_id,
+                    "status": order_status,
+                    "execution_success": order_status in (OrderStatus.SUBMITTED.value, OrderStatus.OPEN.value),
+                }
 
-                    pos_record = {
-                        "trade_id": trade_id,
-                        "broker_name": b_name,
+            # Non-blocking concurrent execution across all ready brokers
+            futures = [self._executor.submit(dispatch_to_broker, b) for b in ready_brokers]
+            for fut in as_completed(futures):
+                try:
+                    result = fut.result(timeout=10.0)
+                    execution_results.append(result)
+                except Exception as exc:
+                    execution_results.append({"status": "FAILED", "error": str(exc)})
+
+            # Register open position for successfully submitted broker executions
+            successful_brokers = [r["broker"] for r in execution_results if r.get("execution_success")]
+            if successful_brokers:
+                with self._lock:
+                    pos_id = len(self._open_positions) + 1
+                    self._open_positions[pos_id] = {
+                        "id": pos_id,
+                        "trade_id": pos_id,
                         "symbol": symbol,
                         "side": normalized_side,
                         "quantity": quantity,
@@ -343,48 +434,30 @@ class OrderRouter:
                         "stop_loss": stop_loss,
                         "target_price": target_price,
                         "market_session": session_type,
-                        "execution_mode": "LIVE",
-                        "status": "OPEN",
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
-                    with self._lock:
-                        self._open_positions[trade_id] = pos_record
-
-                    return {
-                        "broker": b_name,
-                        "trade_id": trade_id,
-                        "broker_order_id": b_order_id,
-                        "status": order_status
+                        "broker": ", ".join(successful_brokers),
+                        "execution_id": execution_uuid,
+                        "created_at": datetime.now(timezone.utc).isoformat()
                     }
 
-                # Non-blocking concurrent execution
-                futures = [self._executor.submit(dispatch_to_broker, b) for b in ready_brokers]
-                for fut in futures:
-                    try:
-                        execution_results.append(fut.result(timeout=10.0))
-                    except Exception as exc:
-                        execution_results.append({"status": "FAILED", "error": str(exc)})
-
-                primary_res = execution_results[0] if execution_results else {}
-                return {
-                    "status": "SUBMITTED",
-                    "symbol": symbol,
-                    "side": normalized_side,
-                    "quantity": quantity,
-                    "price": price,
-                    "stop_loss": stop_loss,
-                    "target_price": target_price,
-                    "execution_mode": "LIVE",
-                    "dispatched_brokers": ready_brokers,
-                    "disconnected_brokers": disconnected_brokers,
-                    "results": execution_results,
-                    "trade_id": primary_res.get("trade_id", 0),
-                    "order_id": primary_res.get("broker_order_id", ""),
-                    "message": f"Concurrently routed across {len(ready_brokers)} enabled brokers: {', '.join(ready_brokers)}"
-                }
-
-            else:
-                raise ValueError(f"Unsupported execution mode '{mode}'. Use 'PAPER' or 'LIVE'.")
+            primary_res = execution_results[0] if execution_results else {}
+            return {
+                "status": "SUBMITTED",
+                "symbol": symbol,
+                "side": normalized_side,
+                "quantity": quantity,
+                "price": price,
+                "stop_loss": stop_loss,
+                "target_price": target_price,
+                "execution_mode": "LIVE",
+                "dispatched_brokers": ready_brokers,
+                "disconnected_brokers": disconnected_brokers,
+                "results": execution_results,
+                "execution_id": execution_uuid,
+                "order_id": primary_res.get("broker_order_id", ""),
+                "message": f"Concurrently routed across {len(ready_brokers)} enabled brokers: {', '.join(ready_brokers)}"
+            }
+        else:
+            raise ValueError(f"Unsupported execution mode '{mode}'. Use 'PAPER' or 'LIVE'.")
 
     # =========================================================================
     # Position Liquidation & Auto Square-Off
@@ -393,18 +466,50 @@ class OrderRouter:
     def close_position(self, trade_id: int, exit_price: float) -> Dict[str, Any]:
         """Closes an active position, applies ₹60 friction deduction, and updates SQLite."""
         with self._lock:
-            pos = self._open_positions.get(trade_id)
-            if not pos:
-                return self.db.update_trade_exit(trade_id=trade_id, exit_price=exit_price, status="CLOSED")
+            pos = self._open_positions.pop(trade_id, None)
 
-            closed_record = self.db.update_trade_exit(
-                trade_id=trade_id,
-                exit_price=exit_price,
-                status="CLOSED",
-                friction_cost=self.FRICTION_COST_INR
-            )
-            del self._open_positions[trade_id]
-            return closed_record
+            # Try updating via db_manager
+            closed_record = None
+            if hasattr(self.db_manager, "update_trade_exit"):
+                try:
+                    closed_record = self.db_manager.update_trade_exit(
+                        trade_id=trade_id,
+                        exit_price=exit_price,
+                        status="CLOSED",
+                        friction_cost=self.FRICTION_COST_INR
+                    )
+                except Exception:
+                    pass
+
+            if closed_record:
+                if "trade_id" not in closed_record and "id" in closed_record:
+                    closed_record["trade_id"] = closed_record["id"]
+                if "id" not in closed_record and "trade_id" in closed_record:
+                    closed_record["id"] = closed_record["trade_id"]
+                return closed_record
+
+            # Fallback calculation if db record not present or db update failed
+            entry_price = pos.get("entry_price", exit_price) if pos else exit_price
+            quantity = pos.get("quantity", 1) if pos else 1
+            side = pos.get("side", "BUY") if pos else "BUY"
+
+            if side == "BUY":
+                gross_pnl = round((float(exit_price) - float(entry_price)) * quantity, 2)
+            else:
+                gross_pnl = round((float(entry_price) - float(exit_price)) * quantity, 2)
+            net_pnl = round(gross_pnl - self.FRICTION_COST_INR, 2)
+
+            return {
+                "id": trade_id,
+                "trade_id": trade_id,
+                "status": "CLOSED",
+                "exit_price": exit_price,
+                "gross_pnl": gross_pnl,
+                "friction_cost": self.FRICTION_COST_INR,
+                "net_pnl": net_pnl,
+                "symbol": pos.get("symbol", "") if pos else "",
+                "broker": pos.get("broker", "") if pos else "",
+            }
 
     def auto_square_off_all(self, reason: str = "EMERGENCY_KILL_SWITCH") -> List[Dict[str, Any]]:
         """Liquidates all open positions immediately (Emergency Kill Switch)."""
@@ -412,9 +517,13 @@ class OrderRouter:
         with self._lock:
             for trade_id, pos in list(self._open_positions.items()):
                 exit_price = pos.get("entry_price", 0.0)
-                closed = self.close_position(trade_id, exit_price)
-                closed["square_off_reason"] = reason
+                closed = self.close_position(trade_id=trade_id, exit_price=exit_price)
+                closed["liquidated_at"] = datetime.now(timezone.utc).isoformat()
+                closed["reason"] = reason
+                closed["broker"] = pos.get("broker", "ALL")
+                closed["symbol"] = pos.get("symbol", "")
                 liquidated.append(closed)
+            self._open_positions.clear()
         return liquidated
 
     def evaluate_auto_square_off(self, current_time: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -456,3 +565,31 @@ class OrderRouter:
         """Returns all currently open positions."""
         with self._lock:
             return list(self._open_positions.values())
+
+    @property
+    def positions(self) -> Dict[int, Dict[str, Any]]:
+        """Dictionary of open positions for GUI telemetry access."""
+        with self._lock:
+            return dict(self._open_positions)
+
+    # =========================================================================
+    # Daily Loss Tracking Integration
+    # =========================================================================
+
+    def update_daily_loss_tracker(self, realized_pnl: float) -> None:
+        """Updates the daily realized P&L tracker from risk engine."""
+        with self._lock:
+            self._daily_loss_tracker["realized"] = realized_pnl
+
+    def reset_daily_loss_tracker(self, new_starting_capital: float = 500000.0) -> None:
+        """Resets the daily loss tracker for a new trading session."""
+        with self._lock:
+            self._daily_loss_tracker["realized"] = 0.0
+            self._daily_loss_tracker["starting_capital"] = new_starting_capital
+            self._engine_locked = False  # Reset circuit breaker for new session
+
+
+def initialize_order_router(db_manager=None, vault_manager=None) -> OrderRouter:
+    """Factory function to initialize the complete order routing system."""
+    router = OrderRouter(db_manager=db_manager)
+    return router

@@ -519,6 +519,7 @@ class BrokerCard(QFrame):
         # Update Connect / Disconnect button appearance
         if self.current_state == "CONNECTED":
             self.btn_connect.setText("Disconnect")
+            self.btn_connect.setEnabled(True)
             self.btn_connect.setStyleSheet("""
                 QPushButton {
                     background-color: #7f1d1d;
@@ -727,7 +728,10 @@ class BrokerControlWidget(QFrame):
 
     def _handle_trading_toggled(self, broker_name: str, enabled: bool) -> None:
         """Records trading toggle in vault and emits notification."""
-        self.vault.set_trading_enabled(broker_name, enabled)
+        try:
+            self.vault.set_trading_enabled(broker_name, enabled)
+        except Exception:
+            pass
         self.trading_toggle_changed.emit(broker_name, enabled)
 
     def _update_card_state_safe(self, broker_name: str, state: str, err: Optional[str] = None) -> None:

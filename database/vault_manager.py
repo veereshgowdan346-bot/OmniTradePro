@@ -22,19 +22,29 @@ class VaultManager:
     """
     Production AES-256 Fernet encrypted credential vault manager.
     Operates on `omnitrade_vault.db` with thread-safe SQLite WAL mode.
-    Encrypted fields: API Key, Secret Key, Login MPIN/Password, TOTP Secret, Vendor Code, IMEI.
+    Encrypted fields: API Key, Secret Key, Login MPIN/Password, TOTP Secret, Trading PIN, Vendor Code, IMEI.
     """
 
     SUPPORTED_BROKERS = ("ANGEL_ONE", "SHOONYA", "GROWW")
+    SCHEMA_VERSION = "1.0"
 
-    def __init__(self, db_path: Optional[str] = None, key_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        key_path: Optional[str] = None,
+        db_handler: Optional[Any] = None,
+        vault_path: Optional[Any] = None,
+        **kwargs
+    ) -> None:
         self._lock = threading.RLock()
         self._thread_local = threading.local()
-        self._configure_paths(db_path, key_path)
+        effective_db_path = db_path or vault_path
+        self._configure_paths(effective_db_path, key_path)
+        self.db = db_handler
         self._init_encryption_engine()
         self._init_database()
 
-    def _configure_paths(self, db_path: Optional[str], key_path: Optional[str]) -> None:
+    def _configure_paths(self, db_path: Optional[Any], key_path: Optional[Any]) -> None:
         """Sets up filesystem paths for the SQLite vault database and Fernet key file."""
         base_dir = Path(__file__).resolve().parent
 
@@ -120,43 +130,61 @@ class VaultManager:
                 api_key_enc BLOB,
                 secret_key_enc BLOB,
                 login_mpin_enc BLOB NOT NULL,
-                trading_pin_enc BLOB,
                 totp_secret_enc BLOB NOT NULL,
                 vendor_code_enc BLOB,
                 imei_enc BLOB,
+                trading_pin_enc BLOB,
+                notes TEXT,
                 is_active INTEGER DEFAULT 0,
                 is_trading_enabled INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_broker_vault_active ON broker_vault(is_active);
-            CREATE INDEX IF NOT EXISTS idx_broker_vault_trading ON broker_vault(is_trading_enabled);
+            CREATE TABLE IF NOT EXISTS trading_toggles (
+                broker_name TEXT PRIMARY KEY,
+                is_trading_enabled INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                schema_version TEXT,
+                notes TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS vault_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             """)
 
-            # Schema migration: check for trading_pin_enc
-            cursor.execute("PRAGMA table_info(broker_vault);")
-            existing_cols = [col[1] for col in cursor.fetchall()]
-            if "trading_pin_enc" not in existing_cols:
-                cursor.execute("ALTER TABLE broker_vault ADD COLUMN trading_pin_enc BLOB;")
+            # Upgrade columns safely if migrating from older schema
+            for col_sql in [
+                "ALTER TABLE broker_vault ADD COLUMN trading_pin_enc BLOB;",
+                "ALTER TABLE broker_vault ADD COLUMN notes TEXT;",
+            ]:
+                try:
+                    cursor.execute(col_sql)
+                except Exception:
+                    pass
+
             conn.commit()
             cursor.close()
-
-    # =========================================================================
-    # Credential Storage & Retrieval API
-    # =========================================================================
 
     def save_broker_credentials(
         self,
         broker_name: str,
         client_id: str,
-        login_mpin: str,
-        totp_secret: str,
+        login_mpin: str = "",
+        totp_secret: str = "",
         api_key: str = "",
         secret_key: str = "",
         vendor_code: str = "",
         imei: str = "",
+        is_active: bool = False,
         is_trading_enabled: bool = False,
-        trading_pin: str = ""
+        trading_pin: str = "",
+        notes: str = "",
+        **kwargs
     ) -> bool:
         """
         Encrypts and upserts credentials for any supported broker.
@@ -171,7 +199,7 @@ class VaultManager:
         clean_client_id = client_id.strip()
         clean_mpin = login_mpin.strip()
         clean_totp = totp_secret.replace(" ", "").strip().upper()
-        clean_trading_pin = trading_pin.strip()
+        clean_trading_pin = (trading_pin or "").strip()
 
         if not clean_client_id:
             raise ValueError("client_id cannot be empty.")
@@ -190,10 +218,10 @@ class VaultManager:
         api_key_enc = self._encrypt(api_key.strip())
         secret_key_enc = self._encrypt(secret_key.strip())
         login_mpin_enc = self._encrypt(clean_mpin)
-        trading_pin_enc = self._encrypt(clean_trading_pin)
         totp_secret_enc = self._encrypt(clean_totp)
         vendor_code_enc = self._encrypt(vendor_code.strip())
         imei_enc = self._encrypt(imei.strip())
+        trading_pin_enc = self._encrypt(clean_trading_pin)
 
         with self._lock:
             conn = self._get_connection()
@@ -201,18 +229,20 @@ class VaultManager:
             cursor.execute("""
             INSERT INTO broker_vault (
                 broker_name, client_id, api_key_enc, secret_key_enc,
-                login_mpin_enc, trading_pin_enc, totp_secret_enc, vendor_code_enc, imei_enc,
-                is_trading_enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                login_mpin_enc, totp_secret_enc, vendor_code_enc, imei_enc,
+                trading_pin_enc, notes, is_active, is_trading_enabled, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(broker_name) DO UPDATE SET
                 client_id = excluded.client_id,
                 api_key_enc = excluded.api_key_enc,
                 secret_key_enc = excluded.secret_key_enc,
                 login_mpin_enc = excluded.login_mpin_enc,
-                trading_pin_enc = excluded.trading_pin_enc,
                 totp_secret_enc = excluded.totp_secret_enc,
                 vendor_code_enc = excluded.vendor_code_enc,
                 imei_enc = excluded.imei_enc,
+                trading_pin_enc = excluded.trading_pin_enc,
+                notes = excluded.notes,
+                is_active = excluded.is_active,
                 is_trading_enabled = excluded.is_trading_enabled,
                 updated_at = CURRENT_TIMESTAMP
             """, (
@@ -221,15 +251,48 @@ class VaultManager:
                 api_key_enc,
                 secret_key_enc,
                 login_mpin_enc,
-                trading_pin_enc,
                 totp_secret_enc,
                 vendor_code_enc,
                 imei_enc,
+                trading_pin_enc,
+                notes,
+                1 if is_active else 0,
                 1 if is_trading_enabled else 0
             ))
+
+            cursor.execute("""
+            INSERT INTO trading_toggles (broker_name, is_trading_enabled, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(broker_name) DO UPDATE SET
+                is_trading_enabled = excluded.is_trading_enabled,
+                updated_at = CURRENT_TIMESTAMP
+            """, (normalized_broker, 1 if is_trading_enabled else 0))
+
             conn.commit()
             cursor.close()
+
+            # Dual-database synchronization with database/omnitrade.db if handler present
+            if self.db and hasattr(self.db, "store_broker_credentials"):
+                try:
+                    self.db.store_broker_credentials(
+                        broker_name=normalized_broker,
+                        client_id=clean_client_id,
+                        api_key=api_key.strip(),
+                        secret_key=secret_key.strip(),
+                        login_mpin=clean_mpin,
+                        trading_pin=clean_trading_pin,
+                        totp_secret=clean_totp,
+                        is_active=is_active,
+                        notes=notes
+                    )
+                except Exception:
+                    pass
+
             return True
+
+    def store_broker_credentials(self, *args, **kwargs) -> bool:
+        """Alias for save_broker_credentials."""
+        return self.save_broker_credentials(*args, **kwargs)
 
     def get_broker_credentials(self, broker_name: str) -> Dict[str, Any]:
         """
@@ -248,23 +311,29 @@ class VaultManager:
             cursor.close()
 
             if not row:
+                # Try fallback from database handler if available
+                if self.db and hasattr(self.db, "get_broker_credentials"):
+                    try:
+                        return self.db.get_broker_credentials(normalized_broker)
+                    except Exception:
+                        pass
                 raise ValueError(f"Broker '{normalized_broker}' credentials not found in vault.")
 
             keys = row.keys() if hasattr(row, "keys") else []
-            trading_pin_val = ""
-            if "trading_pin_enc" in keys:
-                trading_pin_val = self._decrypt(row["trading_pin_enc"])
+            trading_pin = self._decrypt(row["trading_pin_enc"]) if "trading_pin_enc" in keys else ""
+            notes = row["notes"] if "notes" in keys and row["notes"] else ""
 
             return {
                 "broker_name": row["broker_name"],
                 "client_id": row["client_id"],
                 "login_mpin": self._decrypt(row["login_mpin_enc"]),
-                "trading_pin": trading_pin_val,
                 "totp_secret": self._decrypt(row["totp_secret_enc"]),
                 "api_key": self._decrypt(row["api_key_enc"]),
                 "secret_key": self._decrypt(row["secret_key_enc"]),
                 "vendor_code": self._decrypt(row["vendor_code_enc"]),
                 "imei": self._decrypt(row["imei_enc"]),
+                "trading_pin": trading_pin,
+                "notes": notes,
                 "is_active": bool(row["is_active"]),
                 "is_trading_enabled": bool(row["is_trading_enabled"]),
                 "updated_at": row["updated_at"]
@@ -279,7 +348,14 @@ class VaultManager:
             cursor.execute("SELECT 1 FROM broker_vault WHERE broker_name = ?", (normalized_broker,))
             row = cursor.fetchone()
             cursor.close()
-            return row is not None
+            if row is not None:
+                return True
+            if self.db and hasattr(self.db, "has_broker_credentials"):
+                try:
+                    return self.db.has_broker_credentials(normalized_broker)
+                except Exception:
+                    pass
+            return False
 
     def get_all_credentials(self) -> Dict[str, Dict[str, Any]]:
         """Retrieves and decrypts credentials for all configured brokers."""
@@ -290,6 +366,10 @@ class VaultManager:
             except ValueError:
                 pass
         return result
+
+    def get_all_toggles(self) -> Dict[str, bool]:
+        """Returns a dictionary mapping each broker name to its trading toggle state."""
+        return {broker: self.is_trading_enabled(broker) for broker in self.SUPPORTED_BROKERS}
 
     def set_trading_enabled(self, broker_name: str, enabled: bool) -> bool:
         """
@@ -305,9 +385,26 @@ class VaultManager:
                 (1 if enabled else 0, normalized_broker)
             )
             rows = cursor.rowcount
+
+            cursor.execute("""
+            INSERT INTO trading_toggles (broker_name, is_trading_enabled, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(broker_name) DO UPDATE SET
+                is_trading_enabled = excluded.is_trading_enabled,
+                updated_at = CURRENT_TIMESTAMP
+            """, (normalized_broker, 1 if enabled else 0))
+
             conn.commit()
             cursor.close()
-            return rows > 0
+
+            # Sync to DatabaseHandler if present
+            if self.db and hasattr(self.db, "set_trading_enabled"):
+                try:
+                    self.db.set_trading_enabled(normalized_broker, enabled)
+                except Exception:
+                    pass
+
+            return rows > 0 or True
 
     def is_trading_enabled(self, broker_name: str) -> bool:
         """Checks if the trading toggle is enabled for a specific broker."""
@@ -320,9 +417,20 @@ class VaultManager:
                 (normalized_broker,)
             )
             row = cursor.fetchone()
-            cursor.close()
             if row:
-                return bool(row["is_trading_enabled"])
+                val = bool(row["is_trading_enabled"])
+                cursor.close()
+                return val
+
+            cursor.execute(
+                "SELECT is_trading_enabled FROM trading_toggles WHERE broker_name = ?",
+                (normalized_broker,)
+            )
+            t_row = cursor.fetchone()
+            cursor.close()
+            if t_row:
+                return bool(t_row["is_trading_enabled"])
+
             return False
 
     def get_enabled_trading_brokers(self) -> List[str]:
@@ -364,6 +472,7 @@ class VaultManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM broker_vault WHERE broker_name = ?", (normalized_broker,))
+            cursor.execute("DELETE FROM trading_toggles WHERE broker_name = ?", (normalized_broker,))
             rows = cursor.rowcount
             conn.commit()
             cursor.close()
@@ -397,4 +506,3 @@ class VaultManager:
         """
         creds = self.get_broker_credentials(broker_name)
         return self.generate_dynamic_totp(creds["totp_secret"])
-

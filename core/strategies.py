@@ -19,15 +19,16 @@ class SMCLiquiditySweep:
     """
     Smart Money Concepts (SMC) Liquidity Sweep Detector.
     Scans a rolling 20-candle lookback window for key structural swing highs/lows.
-    Identifies liquidity grabs where price wicks beyond a swing level to trigger
-    retail stop orders, but candle closes back within the interior boundary.
+    Identifies liquidity grabs where price wicks beyond a swing level within a
+    3-candle confirmation window, but closes back within the interior boundary.
     """
     LOOKBACK = 20
+    CONFIRMATION_WINDOW = 3
 
     @classmethod
     def evaluate(cls, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Evaluates liquidity sweep structure on the latest candle.
+        Evaluates liquidity sweep structure on the latest candle with a 3-candle confirmation window.
         Returns:
             {
                 "vote": int (+1 for Bullish Sweep, -1 for Bearish Sweep, 0 for Neutral),
@@ -39,33 +40,61 @@ class SMCLiquiditySweep:
         if len(df) < cls.LOOKBACK + 1:
             return {"vote": 0, "swing_high": 0.0, "swing_low": 0.0, "description": "Insufficient candle lookback."}
 
-        # Rolling 20 candles prior to current candle
-        lookback_window = df.iloc[-(cls.LOOKBACK + 1):-1]
+        # Determine confirmation window (up to 3 candles)
+        conf_len = min(cls.CONFIRMATION_WINDOW, max(1, len(df) - cls.LOOKBACK))
+
+        # Swing lookback window strictly prior to the confirmation window
+        lookback_window = df.iloc[-(cls.LOOKBACK + conf_len):-conf_len]
+        if lookback_window.empty:
+            lookback_window = df.iloc[-(cls.LOOKBACK + 1):-1]
+
         swing_high = round(float(lookback_window["High"].max()), 2)
         swing_low = round(float(lookback_window["Low"].min()), 2)
 
+        recent_window = df.iloc[-conf_len:]
         cur_bar = df.iloc[-1]
-        cur_high = float(cur_bar["High"])
-        cur_low = float(cur_bar["Low"])
         cur_close = float(cur_bar["Close"])
 
-        # Bullish Sweep: Price takes out swing low (sell-side liquidity) but closes back above
-        if cur_low < swing_low and cur_close > swing_low:
+        min_recent_low = float(recent_window["Low"].min())
+        max_recent_high = float(recent_window["High"].max())
+
+        swept_low = (min_recent_low < swing_low) and (cur_close > swing_low)
+        swept_high = (max_recent_high > swing_high) and (cur_close < swing_high)
+
+        # Bullish Sweep: Price took out swing low within confirmation window but current bar closes back above
+        if swept_low and not swept_high:
             return {
                 "vote": 1,
                 "swing_high": swing_high,
                 "swing_low": swing_low,
-                "description": f"Bullish SMC Sweep: Low ₹{cur_low:.2f} grabbed liquidity below ₹{swing_low:.2f}, closed @ ₹{cur_close:.2f}"
+                "description": f"Bullish SMC Sweep: Low ₹{min_recent_low:.2f} grabbed liquidity below ₹{swing_low:.2f}, confirmed close @ ₹{cur_close:.2f}"
             }
 
-        # Bearish Sweep: Price pierces swing high (buy-side liquidity) but closes back below
-        if cur_high > swing_high and cur_close < swing_high:
+        # Bearish Sweep: Price pierced swing high within confirmation window but current bar closes back below
+        if swept_high and not swept_low:
             return {
                 "vote": -1,
                 "swing_high": swing_high,
                 "swing_low": swing_low,
-                "description": f"Bearish SMC Sweep: High ₹{cur_high:.2f} grabbed liquidity above ₹{swing_high:.2f}, closed @ ₹{cur_close:.2f}"
+                "description": f"Bearish SMC Sweep: High ₹{max_recent_high:.2f} grabbed liquidity above ₹{swing_high:.2f}, confirmed close @ ₹{cur_close:.2f}"
             }
+
+        if swept_low and swept_high:
+            # Reversal direction based on latest bar momentum
+            if cur_close > float(cur_bar["Open"]):
+                return {
+                    "vote": 1,
+                    "swing_high": swing_high,
+                    "swing_low": swing_low,
+                    "description": f"Bullish SMC Sweep (Dual Expansion): Confirmed close @ ₹{cur_close:.2f}"
+                }
+            else:
+                return {
+                    "vote": -1,
+                    "swing_high": swing_high,
+                    "swing_low": swing_low,
+                    "description": f"Bearish SMC Sweep (Dual Expansion): Confirmed close @ ₹{cur_close:.2f}"
+                }
 
         return {
             "vote": 0,
