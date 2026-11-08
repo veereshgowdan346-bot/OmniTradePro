@@ -49,3 +49,13 @@ class SettingsView(BasePageView):
         self.btn_test_auth = self.vault_widget.btn_test_auth
         self.btn_save = self.vault_widget.btn_save
         self.btn_set_active = self.vault_widget.btn_set_active
+
+        # Direct accessors for notification controls
+        self.chk_trade_alerts = self.vault_widget.chk_trade_alerts
+        self.chk_daily_summary = self.vault_widget.chk_daily_summary
+        self.recipient_email_edit = self.vault_widget.recipient_email_edit
+        self.sender_email_edit = self.vault_widget.sender_email_edit
+        self.smtp_key_edit = self.vault_widget.smtp_key_edit
+        self.btn_test_notify = self.vault_widget.btn_test_notify
+        self.lbl_notify_status = self.vault_widget.lbl_notify_status
+

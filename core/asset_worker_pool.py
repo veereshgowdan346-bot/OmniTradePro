@@ -311,6 +311,15 @@ class AssetWorkerPool:
             commodity_shards = {"GOLD_SHARD", "SILVER_SHARD", "CRUDEOIL_SHARD"}
             return [s for s in all_shards if s not in commodity_shards]
 
+    def evaluate_session_square_off(self, current_time: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Executes mandatory session auto-square-off (15:15 IST Equity / 23:15 IST MCX)
+        and sends end-of-day daily P&L summary via TradeNotifier.
+        """
+        if self.order_router and hasattr(self.order_router, "evaluate_auto_square_off"):
+            return self.order_router.evaluate_auto_square_off(current_time=current_time)
+        return []
+
     def wait_idle(self, timeout: float = 5.0) -> bool:
         """Waits until all worker queues are completely drained."""
         end_time = time.perf_counter() + timeout

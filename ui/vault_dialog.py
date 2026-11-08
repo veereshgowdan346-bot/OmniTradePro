@@ -28,7 +28,7 @@ try:
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
         QPushButton, QComboBox, QFrame, QMessageBox, QGroupBox,
-        QProgressBar, QScrollArea, QWidget
+        QProgressBar, QScrollArea, QWidget, QCheckBox
     )
     from PySide6.QtCore import Qt, QTimer, Signal
     from PySide6.QtGui import QFont
@@ -52,6 +52,15 @@ except ImportError:
         def setProperty(self, k, v): pass
         def setVisible(self, v): pass
         def setLayout(self, l): pass
+    class QCheckBox:
+        def __init__(self, text="", parent=None):
+            self.text = text
+            self._checked = False
+        def isChecked(self): return self._checked
+        def setChecked(self, c): self._checked = bool(c)
+        def setStyleSheet(self, s): pass
+        def setProperty(self, k, v): pass
+        def stateChanged(self): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
         def addWidget(self, w, *args): pass
@@ -106,6 +115,7 @@ except ImportError:
         def setProperty(self, k, v): pass
         def setVisible(self, v): pass
     class QFrame:
+        NoFrame = 0
         def __init__(self, parent=None): pass
         def setFrameShape(self, s): pass
         def setProperty(self, k, v): pass
@@ -127,6 +137,7 @@ except ImportError:
         def setWidgetResizable(self, r): pass
         def setWidget(self, w): pass
         def setStyleSheet(self, s): pass
+        def setFrameShape(self, s): pass
     class QMessageBox:
         @staticmethod
         def information(p, t, m): pass
@@ -163,6 +174,7 @@ class BrokerVaultWidget(QWidget):
         self._init_ui()
         self._init_totp_timer()
         self._load_selected_broker_credentials()
+        self._load_notification_settings()
 
     def _init_ui(self) -> None:
         self.setStyleSheet("""
@@ -402,6 +414,99 @@ class BrokerVaultWidget(QWidget):
         form_layout.addWidget(self.secret_key_edit)
 
         layout.addWidget(form_frame)
+
+        # 3.5. Alerts & Notifications (Email Service)
+        notify_frame = QFrame(self)
+        notify_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(13, 21, 39, 0.85);
+                border: 1px solid #142236;
+                border-radius: 8px;
+            }
+        """)
+        notify_layout = QVBoxLayout(notify_frame)
+        notify_layout.setContentsMargins(16, 14, 16, 14)
+        notify_layout.setSpacing(9)
+
+        notify_hdr_box = QHBoxLayout()
+        lbl_notify_title = QLabel("ALERTS & EMAIL NOTIFICATIONS", self)
+        lbl_notify_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #00e5ff; letter-spacing: 0.5px;")
+        notify_hdr_box.addWidget(lbl_notify_title)
+        notify_hdr_box.addStretch()
+        notify_layout.addLayout(notify_hdr_box)
+
+        # Checkboxes
+        chk_box = QHBoxLayout()
+        chk_box.setSpacing(16)
+        self.chk_trade_alerts = QCheckBox("Enable Instant Trade Email Alerts", self)
+        self.chk_trade_alerts.setStyleSheet("color: #f8fafc; font-size: 12px; font-weight: 600;")
+        self.chk_trade_alerts.setChecked(True)
+
+        self.chk_daily_summary = QCheckBox("Enable Daily 15:15 / 23:15 P&L Summary", self)
+        self.chk_daily_summary.setStyleSheet("color: #f8fafc; font-size: 12px; font-weight: 600;")
+        self.chk_daily_summary.setChecked(True)
+
+        chk_box.addWidget(self.chk_trade_alerts)
+        chk_box.addWidget(self.chk_daily_summary)
+        chk_box.addStretch()
+        notify_layout.addLayout(chk_box)
+
+        # Input: Recipient Email
+        notify_layout.addWidget(QLabel("Recipient Email (Operator Alert Destination):", self))
+        self.recipient_email_edit = QLineEdit(self)
+        self.recipient_email_edit.setPlaceholderText("e.g. operator@domain.com")
+        notify_layout.addWidget(self.recipient_email_edit)
+
+        # Input: Sender Email (Optional)
+        notify_layout.addWidget(QLabel("Sender Email / SMTP Username (Optional):", self))
+        self.sender_email_edit = QLineEdit(self)
+        self.sender_email_edit.setPlaceholderText("e.g. alerts@domain.com (defaults to Recipient Email if blank)")
+        notify_layout.addWidget(self.sender_email_edit)
+
+        # Input: Email API Key / SMTP App Password
+        notify_layout.addWidget(QLabel("Email API Key / SMTP App Password:", self))
+        smtp_key_box = QHBoxLayout()
+        self.smtp_key_edit = QLineEdit(self)
+        self.smtp_key_edit.setEchoMode(QLineEdit.Password)
+        self.smtp_key_edit.setPlaceholderText("Enter 16-character Gmail App Password or Resend API key (re_...)")
+        self.btn_toggle_smtp_key = QPushButton("👁 Show", self)
+        self.btn_toggle_smtp_key.setFixedWidth(70)
+        try:
+            self.btn_toggle_smtp_key.clicked.connect(lambda: self._toggle_echo(self.smtp_key_edit, self.btn_toggle_smtp_key))
+        except Exception:
+            pass
+        smtp_key_box.addWidget(self.smtp_key_edit)
+        smtp_key_box.addWidget(self.btn_toggle_smtp_key)
+        notify_layout.addLayout(smtp_key_box)
+
+        # Action: Test Notification
+        notify_action_row = QHBoxLayout()
+        self.btn_test_notify = QPushButton("✉ Test Notification", self)
+        self.btn_test_notify.setStyleSheet("""
+            QPushButton {
+                background-color: #0369a1;
+                border: 1px solid #38bdf8;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 7px 14px;
+            }
+            QPushButton:hover {
+                background-color: #0284c7;
+            }
+        """)
+        try:
+            self.btn_test_notify.clicked.connect(self._test_notification)
+        except Exception:
+            pass
+        notify_action_row.addWidget(self.btn_test_notify)
+
+        self.lbl_notify_status = QLabel("", self)
+        self.lbl_notify_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        notify_action_row.addWidget(self.lbl_notify_status)
+        notify_action_row.addStretch()
+        notify_layout.addLayout(notify_action_row)
+
+        layout.addWidget(notify_frame)
 
         # 4. Live Authentication Status Banner
         self.auth_status_banner = QLabel("", self)
@@ -715,6 +820,17 @@ class BrokerVaultWidget(QWidget):
                 secret_key=secret_key
             )
 
+            # 3. Save Notification Settings if configured
+            recip = self.recipient_email_edit.text().strip()
+            if recip:
+                self.vault.save_notification_settings(
+                    recipient_email=recip,
+                    sender_email=self.sender_email_edit.text().strip(),
+                    smtp_password=self.smtp_key_edit.text().strip(),
+                    trade_alerts_enabled=self.chk_trade_alerts.isChecked(),
+                    daily_summary_enabled=self.chk_daily_summary.isChecked()
+                )
+
             self.auth_status_banner.setText(f"✓ Saved & Encrypted: {broker} credentials stored via AES-256 Fernet.")
             self.auth_status_banner.setStyleSheet("""
                 background-color: #064e3b;
@@ -744,6 +860,66 @@ class BrokerVaultWidget(QWidget):
             self._load_selected_broker_credentials()
         else:
             QMessageBox.warning(self, "Action Failed", f"Could not activate {broker}. Ensure credentials are saved first.")
+
+    def _load_notification_settings(self) -> None:
+        """Pulls decrypted notification settings from vault and populates notification fields."""
+        try:
+            settings = self.vault.get_notification_settings()
+            self.recipient_email_edit.setText(settings.get("recipient_email", ""))
+            self.sender_email_edit.setText(settings.get("sender_email", ""))
+            self.smtp_key_edit.setText(settings.get("smtp_password", ""))
+            self.chk_trade_alerts.setChecked(settings.get("trade_alerts_enabled", True))
+            self.chk_daily_summary.setChecked(settings.get("daily_summary_enabled", True))
+        except Exception:
+            pass
+
+    def _test_notification(self) -> None:
+        """Tests email delivery asynchronously in a background thread."""
+        recip = self.recipient_email_edit.text().strip()
+        pwd = self.smtp_key_edit.text().strip()
+        sender = self.sender_email_edit.text().strip()
+
+        if not recip:
+            self.lbl_notify_status.setText("⚠ Enter Recipient Email first.")
+            self.lbl_notify_status.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: bold;")
+            return
+        if not pwd:
+            self.lbl_notify_status.setText("⚠ Enter Email API / App Password.")
+            self.lbl_notify_status.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: bold;")
+            return
+
+        self.lbl_notify_status.setText("Dispatching test alert...")
+        self.lbl_notify_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.btn_test_notify.setEnabled(False)
+
+        def worker():
+            try:
+                from core.notifier import TradeNotifier
+                notifier = TradeNotifier(
+                    vault_manager=self.vault,
+                    recipient_email=recip,
+                    sender_email=sender,
+                    smtp_password=pwd
+                )
+                success, msg = notifier.send_test_notification(
+                    recipient_override=recip,
+                    password_override=pwd,
+                    sender_override=sender
+                )
+                if success:
+                    self.lbl_notify_status.setText("✓ Test email sent successfully!")
+                    self.lbl_notify_status.setStyleSheet("color: #34d399; font-size: 11px; font-weight: bold;")
+                else:
+                    clean_msg = msg[:40] + "..." if len(msg) > 40 else msg
+                    self.lbl_notify_status.setText(f"✗ Failed: {clean_msg}")
+                    self.lbl_notify_status.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: bold;")
+            except Exception as exc:
+                self.lbl_notify_status.setText(f"✗ Error: {str(exc)[:35]}")
+                self.lbl_notify_status.setStyleSheet("color: #ef4444; font-size: 11px;")
+            finally:
+                self.btn_test_notify.setEnabled(True)
+
+        threading.Thread(target=worker, daemon=True, name="TestNotificationThread").start()
 
     # =========================================================================
     # Live Asynchronous Backend Authentication Testing
@@ -891,8 +1067,13 @@ class BrokerVaultDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        self.vault_widget = BrokerVaultWidget(self)
-        layout.addWidget(self.vault_widget)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        self.vault_widget = BrokerVaultWidget(scroll)
+        scroll.setWidget(self.vault_widget)
+        layout.addWidget(scroll)
 
         # Close button at dialog bottom
         bottom_box = QHBoxLayout()
@@ -921,3 +1102,12 @@ class BrokerVaultDialog(QDialog):
         self.btn_test_auth = self.vault_widget.btn_test_auth
         self.btn_save = self.vault_widget.btn_save
         self.btn_set_active = self.vault_widget.btn_set_active
+
+        # Notification controls accessors
+        self.chk_trade_alerts = self.vault_widget.chk_trade_alerts
+        self.chk_daily_summary = self.vault_widget.chk_daily_summary
+        self.recipient_email_edit = self.vault_widget.recipient_email_edit
+        self.sender_email_edit = self.vault_widget.sender_email_edit
+        self.smtp_key_edit = self.vault_widget.smtp_key_edit
+        self.btn_test_notify = self.vault_widget.btn_test_notify
+        self.lbl_notify_status = self.vault_widget.lbl_notify_status

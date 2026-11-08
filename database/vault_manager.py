@@ -155,6 +155,18 @@ class VaultManager:
                 details TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS notification_vault (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                recipient_email TEXT,
+                sender_email TEXT,
+                smtp_server TEXT,
+                smtp_port INTEGER DEFAULT 587,
+                smtp_password_enc BLOB,
+                trade_alerts_enabled INTEGER DEFAULT 1,
+                daily_summary_enabled INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             """)
 
             # Upgrade columns safely if migrating from older schema
@@ -506,3 +518,86 @@ class VaultManager:
         """
         creds = self.get_broker_credentials(broker_name)
         return self.generate_dynamic_totp(creds["totp_secret"])
+
+    # =========================================================================
+    # Encrypted Email & Notification Settings
+    # =========================================================================
+
+    def save_notification_settings(
+        self,
+        recipient_email: str,
+        smtp_password: str = "",
+        sender_email: str = "",
+        smtp_server: str = "",
+        smtp_port: int = 587,
+        trade_alerts_enabled: bool = True,
+        daily_summary_enabled: bool = True
+    ) -> bool:
+        """
+        Persists email notification credentials with AES-256 field encryption.
+        Guarantees zero plaintext exposure of SMTP passwords or API keys.
+        """
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            pwd_enc = self._encrypt(smtp_password) if smtp_password else None
+            cursor.execute("""
+            INSERT INTO notification_vault (
+                id, recipient_email, sender_email, smtp_server, smtp_port,
+                smtp_password_enc, trade_alerts_enabled, daily_summary_enabled, updated_at
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                recipient_email = excluded.recipient_email,
+                sender_email = excluded.sender_email,
+                smtp_server = excluded.smtp_server,
+                smtp_port = excluded.smtp_port,
+                smtp_password_enc = COALESCE(excluded.smtp_password_enc, notification_vault.smtp_password_enc),
+                trade_alerts_enabled = excluded.trade_alerts_enabled,
+                daily_summary_enabled = excluded.daily_summary_enabled,
+                updated_at = CURRENT_TIMESTAMP;
+            """, (
+                recipient_email.strip(),
+                sender_email.strip() or recipient_email.strip(),
+                smtp_server.strip(),
+                int(smtp_port) if smtp_port else 587,
+                pwd_enc,
+                1 if trade_alerts_enabled else 0,
+                1 if daily_summary_enabled else 0
+            ))
+            conn.commit()
+            cursor.close()
+            return True
+
+    def get_notification_settings(self) -> Dict[str, Any]:
+        """
+        Retrieves and decrypts notification credentials and alert flags from vault.
+        """
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT recipient_email, sender_email, smtp_server, smtp_port,
+                   smtp_password_enc, trade_alerts_enabled, daily_summary_enabled
+            FROM notification_vault WHERE id = 1;
+            """)
+            row = cursor.fetchone()
+            cursor.close()
+            if not row:
+                return {
+                    "recipient_email": "",
+                    "sender_email": "",
+                    "smtp_server": "",
+                    "smtp_port": 587,
+                    "smtp_password": "",
+                    "trade_alerts_enabled": False,
+                    "daily_summary_enabled": False
+                }
+            return {
+                "recipient_email": row["recipient_email"] or "",
+                "sender_email": row["sender_email"] or "",
+                "smtp_server": row["smtp_server"] or "",
+                "smtp_port": row["smtp_port"] or 587,
+                "smtp_password": self._decrypt(row["smtp_password_enc"]),
+                "trade_alerts_enabled": bool(row["trade_alerts_enabled"]),
+                "daily_summary_enabled": bool(row["daily_summary_enabled"])
+            }

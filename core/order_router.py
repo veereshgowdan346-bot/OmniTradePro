@@ -170,6 +170,15 @@ class OrderRouter:
         # Notification / Alert Callback (e.g. desktop UI toast/dialog)
         self.notification_callback: Optional[Callable[[str, str], None]] = None
 
+        # Non-blocking TradeNotifier integration
+        self.notifier = kwargs.get("notifier")
+        if not self.notifier:
+            try:
+                from core.notifier import TradeNotifier
+                self.notifier = TradeNotifier(vault_manager=self.vault)
+            except Exception:
+                self.notifier = None
+
         # Daily risk tracking from risk engine
         self._daily_loss_tracker = {"realized": 0.0, "starting_capital": 500000.0}
 
@@ -474,7 +483,7 @@ class OrderRouter:
                     self._daily_trade_counts[today_str] = {}
                 self._daily_trade_counts[today_str][symbol] = self._daily_trade_counts[today_str].get(symbol, 0) + 1
 
-                return {
+                fill_result = {
                     "status": "FILLED",
                     "trade_id": trade_id,
                     "symbol": symbol,
@@ -488,6 +497,25 @@ class OrderRouter:
                     "execution_mode": "PAPER",
                     "message": "Simulated fill executed via PAPER gateway (0.02% slippage applied)."
                 }
+
+                # Detached asynchronous notification trigger (0.00ms latency impact)
+                if self.notifier:
+                    try:
+                        self.notifier.send_trade_alert({
+                            "symbol": symbol,
+                            "side": normalized_side,
+                            "quantity": quantity,
+                            "price": executed_price,
+                            "target_price": target_price,
+                            "stop_loss": stop_loss,
+                            "execution_mode": "PAPER",
+                            "execution_id": f"PAPER-{trade_id}",
+                            "broker": "PAPER_BROKER"
+                        })
+                    except Exception:
+                        pass
+
+                return fill_result
 
         # =====================================================================
         # 2. LIVE TOGGLE-AWARE MULTI-BROKER EXECUTION GATEWAY
@@ -669,7 +697,7 @@ class OrderRouter:
                 self._daily_trade_counts[today_str][symbol] = self._daily_trade_counts[today_str].get(symbol, 0) + 1
 
             primary_res = execution_results[0] if execution_results else {}
-            return {
+            live_result = {
                 "status": "SUBMITTED",
                 "symbol": symbol,
                 "side": normalized_side,
@@ -687,6 +715,25 @@ class OrderRouter:
                 "fanout_latency_ms": round(fanout_latency_ms, 2),
                 "message": f"Concurrently routed across {len(ready_brokers)} enabled brokers in {fanout_latency_ms:.2f}ms: {', '.join(ready_brokers)}"
             }
+
+            # Detached asynchronous notification trigger (0.00ms latency impact)
+            if self.notifier and successful_brokers:
+                try:
+                    self.notifier.send_trade_alert({
+                        "symbol": symbol,
+                        "side": normalized_side,
+                        "quantity": quantity,
+                        "price": effective_price,
+                        "target_price": target_price,
+                        "stop_loss": stop_loss,
+                        "execution_mode": "LIVE",
+                        "execution_id": execution_uuid,
+                        "broker": ", ".join(successful_brokers)
+                    })
+                except Exception:
+                    pass
+
+            return live_result
         else:
             raise ValueError(f"Unsupported execution mode '{mode}'. Use 'PAPER' or 'LIVE'.")
 
@@ -866,6 +913,30 @@ class OrderRouter:
                     closed_trade = self.close_position(trade_id=trade_id, exit_price=exit_price)
                     closed_trade["square_off_reason"] = f"Mandatory session square-off triggered at {t.strftime('%H:%M')} IST."
                     liquidated_trades.append(closed_trade)
+
+        # Trigger end-of-day summary notification during mandatory auto-square-off
+        if self.notifier and (t >= self.EQUITY_SQUARE_OFF or t >= self.MCX_SQUARE_OFF):
+            try:
+                summary = None
+                if hasattr(self.db_manager, "get_today_summary"):
+                    summary = self.db_manager.get_today_summary()
+                elif hasattr(self.db, "get_today_summary"):
+                    summary = self.db.get_today_summary()
+
+                if not summary:
+                    summary = {
+                        "total_trades": len(liquidated_trades),
+                        "wins": sum(1 for tr in liquidated_trades if tr.get("net_pnl", 0) > 0),
+                        "losses": sum(1 for tr in liquidated_trades if tr.get("net_pnl", 0) < 0),
+                        "win_rate": 0.0,
+                        "realized_pnl": sum(tr.get("net_pnl", 0.0) for tr in liquidated_trades),
+                    }
+
+                summary["market_session"] = "MCX" if t >= self.MCX_SQUARE_OFF else "EQUITY"
+                summary["square_off_time"] = t.strftime("%H:%M")
+                self.notifier.send_daily_summary(summary)
+            except Exception:
+                pass
 
         return liquidated_trades
 

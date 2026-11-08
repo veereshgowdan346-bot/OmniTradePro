@@ -579,6 +579,57 @@ class DatabaseManager:
             conn.commit()
             cursor.close()
 
+    def get_today_summary(self) -> Dict[str, Any]:
+        """
+        Calculates today's real trading summary from persistent trade_audit_log records:
+        Total Trades, Winning Trades, Losing Trades, Win Rate %, Realized P&L,
+        Unrealized P&L, Total Net P&L.
+        """
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT * FROM trade_audit_log WHERE timestamp LIKE ?",
+                    (f"{today_str}%",)
+                )
+                rows = [dict(r) for r in cursor.fetchall()]
+            except Exception:
+                rows = []
+            finally:
+                cursor.close()
+
+            total_trades = len(rows)
+            wins = 0
+            losses = 0
+            realized_pnl = 0.0
+            unrealized_pnl = 0.0
+
+            for r in rows:
+                status = r.get("status", "OPEN")
+                net = float(r.get("net_pnl") or 0.0)
+                if status == "CLOSED":
+                    realized_pnl += net
+                    if net > 0:
+                        wins += 1
+                    elif net < 0:
+                        losses += 1
+                elif status == "OPEN":
+                    unrealized_pnl += net
+
+            win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
+
+            return {
+                "total_trades": total_trades,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized_pnl,
+                "total_pnl": realized_pnl + unrealized_pnl
+            }
+
     def close(self) -> None:
         """Closes the current thread's connection if active."""
         if hasattr(self._local, "connection") and self._local.connection is not None:
