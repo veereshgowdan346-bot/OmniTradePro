@@ -1053,11 +1053,13 @@ class TodaySummaryCard(QFrame):
 class RiskManagerCard(QFrame):
     """
     Bottom Tier Card 2: 🛡 Risk Manager (RMS).
-    Daily Loss Limit: ₹ 2,000 | Used: ₹ 0.00 (0.0%) | 10% Risk Floor.
+    Displays dynamic daily ruin floor limit, live loss tracking, and enforced risk percentage.
     """
+    _all_instances: List["RiskManagerCard"] = []
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        RiskManagerCard._all_instances.append(self)
         self.setStyleSheet("""
             QFrame {
                 background-color: #0d1726;
@@ -1065,7 +1067,10 @@ class RiskManagerCard(QFrame):
                 border-radius: 10px;
             }
         """)
+        self._current_daily_limit: float = 100.0
+        self._current_risk_pct: float = 5.0
         self._init_ui()
+        self._load_config()
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1079,7 +1084,7 @@ class RiskManagerCard(QFrame):
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("Daily Loss Limit", self))
         r1.addStretch()
-        self.v_limit = QLabel("₹ 2,000.00", self)
+        self.v_limit = QLabel("₹ 100.00", self)
         self.v_limit.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 12px;")
         r1.addWidget(self.v_limit)
         layout.addLayout(r1)
@@ -1088,8 +1093,18 @@ class RiskManagerCard(QFrame):
         self.used_lbl.setStyleSheet("color: #90a4ae; font-size: 11px;")
         layout.addWidget(self.used_lbl)
 
+        # Dynamic Max Risk Floor Row
+        r_floor = QHBoxLayout()
+        l_floor = QLabel("Max Risk Floor", self)
+        l_floor.setStyleSheet("color: #90a4ae; font-size: 11px;")
+        self.v_floor = QLabel("5.0% (Enforced)", self)
+        self.v_floor.setStyleSheet("color: #00e676; font-weight: 700; font-size: 11px;")
+        r_floor.addWidget(l_floor)
+        r_floor.addStretch()
+        r_floor.addWidget(self.v_floor)
+        layout.addLayout(r_floor)
+
         rows = [
-            ("Max Risk Floor", "10.0% (Enforced)", "#00e676"),
             ("Friction Buffer", "₹ 60.00 / trade", "#ffffff"),
             ("Min Gross Hurdle", "₹ 70.00", "#00e676")
         ]
@@ -1107,8 +1122,29 @@ class RiskManagerCard(QFrame):
 
         layout.addStretch()
 
-    def update_risk(self, daily_loss: float, daily_limit: float = 2000.0) -> None:
-        pct = (daily_loss / daily_limit * 100.0) if daily_limit > 0 else 0.0
+    def _load_config(self) -> None:
+        """Pulls saved execution parameters from SQLite and updates display."""
+        try:
+            from database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            cfg = db.get_execution_config()
+            cap = float(cfg.get("trade_capital", 1000.0))
+            risk_pct = float(cfg.get("risk_percentage", 5.0))
+            dd_pct = float(cfg.get("daily_drawdown_pct", 10.0))
+            self.update_config(cap, risk_pct, dd_pct)
+        except Exception:
+            pass
+
+    def update_config(self, trade_capital: float, risk_percentage: float, daily_drawdown_pct: float) -> None:
+        """Updates risk limit labels from dynamic admin risk configuration."""
+        self._current_daily_limit = round(trade_capital * (daily_drawdown_pct / 100.0), 2)
+        self._current_risk_pct = float(risk_percentage)
+        self.v_limit.setText(f"₹ {self._current_daily_limit:,.2f}")
+        self.v_floor.setText(f"{self._current_risk_pct:.1f}% (Enforced)")
+
+    def update_risk(self, daily_loss: float, daily_limit: Optional[float] = None) -> None:
+        effective_limit = daily_limit if (daily_limit is not None and daily_limit > 0) else self._current_daily_limit
+        pct = (daily_loss / effective_limit * 100.0) if effective_limit > 0 else 0.0
         col = "#00e676" if pct < 70 else ("#ffab00" if pct < 100 else "#ff1744")
         self.used_lbl.setText(f"Used: <span style='color:{col}; font-weight:bold;'>₹{daily_loss:,.2f} ({pct:.1f}%)</span>")
 

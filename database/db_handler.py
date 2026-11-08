@@ -185,7 +185,9 @@ class DatabaseHandler:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 mode TEXT NOT NULL DEFAULT 'PAPER',
                 trade_capital REAL NOT NULL DEFAULT 1000.0,
+                risk_percentage REAL NOT NULL DEFAULT 5.0,
                 max_sl REAL NOT NULL DEFAULT 80.0,
+                daily_drawdown_pct REAL NOT NULL DEFAULT 10.0,
                 updated_at TEXT NOT NULL
             );
             """)
@@ -195,6 +197,14 @@ class DatabaseHandler:
             cols = [col[1] for col in cursor.fetchall()]
             if "trading_pin_enc" not in cols:
                 cursor.execute("ALTER TABLE broker_vault ADD COLUMN trading_pin_enc BLOB;")
+
+            # Schema migration for execution_config
+            cursor.execute("PRAGMA table_info(execution_config);")
+            cfg_cols = [c[1] for c in cursor.fetchall()]
+            if "risk_percentage" not in cfg_cols:
+                cursor.execute("ALTER TABLE execution_config ADD COLUMN risk_percentage REAL DEFAULT 5.0;")
+            if "daily_drawdown_pct" not in cfg_cols:
+                cursor.execute("ALTER TABLE execution_config ADD COLUMN daily_drawdown_pct REAL DEFAULT 10.0;")
 
             conn.commit()
             cursor.close()
@@ -620,68 +630,93 @@ class DatabaseHandler:
     def get_execution_config(self) -> Dict[str, Any]:
         """
         Retrieves persistent front-page execution & risk parameters.
-        Returns: {'mode': 'PAPER'|'LIVE', 'trade_capital': float, 'max_sl': float, 'updated_at': str}
+        Returns: {
+            'mode': 'PAPER'|'LIVE',
+            'trade_capital': float,
+            'risk_percentage': float,
+            'max_sl': float,
+            'daily_drawdown_pct': float,
+            'updated_at': str
+        }
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
             try:
-                cursor.execute("SELECT mode, trade_capital, max_sl, updated_at FROM execution_config WHERE id = 1")
+                cursor.execute("SELECT mode, trade_capital, risk_percentage, max_sl, daily_drawdown_pct, updated_at FROM execution_config WHERE id = 1")
                 row = cursor.fetchone()
                 if row:
                     return {
                         "mode": str(row["mode"]).strip().upper(),
                         "trade_capital": float(row["trade_capital"]),
+                        "risk_percentage": float(row["risk_percentage"]) if "risk_percentage" in row.keys() and row["risk_percentage"] is not None else 5.0,
                         "max_sl": float(row["max_sl"]),
+                        "daily_drawdown_pct": float(row["daily_drawdown_pct"]) if "daily_drawdown_pct" in row.keys() and row["daily_drawdown_pct"] is not None else 10.0,
                         "updated_at": str(row["updated_at"])
                     }
                 else:
                     cursor.execute("""
-                        INSERT INTO execution_config (id, mode, trade_capital, max_sl, updated_at)
-                        VALUES (1, 'PAPER', 1000.0, 80.0, ?)
+                        INSERT INTO execution_config (id, mode, trade_capital, risk_percentage, max_sl, daily_drawdown_pct, updated_at)
+                        VALUES (1, 'PAPER', 1000.0, 5.0, 80.0, 10.0, ?)
                     """, (now_iso,))
                     conn.commit()
                     return {
                         "mode": "PAPER",
                         "trade_capital": 1000.0,
+                        "risk_percentage": 5.0,
                         "max_sl": 80.0,
+                        "daily_drawdown_pct": 10.0,
                         "updated_at": now_iso
                     }
             except Exception:
                 return {
                     "mode": "PAPER",
                     "trade_capital": 1000.0,
+                    "risk_percentage": 5.0,
                     "max_sl": 80.0,
+                    "daily_drawdown_pct": 10.0,
                     "updated_at": now_iso
                 }
             finally:
                 cursor.close()
 
-    def save_execution_config(self, mode: str, trade_capital: float, max_sl: float) -> bool:
+    def save_execution_config(
+        self,
+        mode: str,
+        trade_capital: float,
+        max_sl: float,
+        risk_percentage: float = 5.0,
+        daily_drawdown_pct: float = 10.0
+    ) -> bool:
         """
-        Persists updated execution mode, trade capital limit, and stop loss limit into execution_config.
+        Persists updated execution mode, trade capital limit, risk percentage, stop loss limit,
+        and daily drawdown limit into execution_config.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         clean_mode = str(mode).strip().upper()
         if clean_mode not in ("PAPER", "LIVE"):
             clean_mode = "PAPER"
         clean_capital = max(100.0, float(trade_capital))
-        clean_max_sl = max(10.0, float(max_sl))
+        clean_risk_pct = max(0.1, min(100.0, float(risk_percentage)))
+        clean_max_sl = max(1.0, float(max_sl))
+        clean_drawdown = max(1.0, min(100.0, float(daily_drawdown_pct)))
 
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
             try:
                 cursor.execute("""
-                    INSERT INTO execution_config (id, mode, trade_capital, max_sl, updated_at)
-                    VALUES (1, ?, ?, ?, ?)
+                    INSERT INTO execution_config (id, mode, trade_capital, risk_percentage, max_sl, daily_drawdown_pct, updated_at)
+                    VALUES (1, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         mode = excluded.mode,
                         trade_capital = excluded.trade_capital,
+                        risk_percentage = excluded.risk_percentage,
                         max_sl = excluded.max_sl,
+                        daily_drawdown_pct = excluded.daily_drawdown_pct,
                         updated_at = excluded.updated_at
-                """, (clean_mode, clean_capital, clean_max_sl, now_iso))
+                """, (clean_mode, clean_capital, clean_risk_pct, clean_max_sl, clean_drawdown, now_iso))
                 conn.commit()
                 return True
             except Exception:

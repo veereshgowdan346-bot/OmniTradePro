@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
                     self.sidebar.risk_controller.risk_parameters_updated.connect(
                         lambda m, c, s: self.order_router.update_risk_parameters(m, c, s, enforce=True)
                     )
+                    self.sidebar.risk_controller.risk_config_updated.connect(
+                        lambda m, c, r, s, d: self.order_router.update_risk_parameters(m, c, s, risk_percentage=r, daily_drawdown_pct=d, enforce=True)
+                    )
                 except Exception:
                     pass
             if hasattr(self.broker_control, "risk_controller") and self.broker_control.risk_controller:
@@ -311,6 +314,20 @@ class MainWindow(QMainWindow):
                 try:
                     self.broker_control.risk_controller.risk_parameters_updated.connect(
                         lambda m, c, s: self.order_router.update_risk_parameters(m, c, s, enforce=True)
+                    )
+                    self.broker_control.risk_controller.risk_config_updated.connect(
+                        lambda m, c, r, s, d: self.order_router.update_risk_parameters(m, c, s, risk_percentage=r, daily_drawdown_pct=d, enforce=True)
+                    )
+                except Exception:
+                    pass
+            if hasattr(self, "risk_manager_view") and self.risk_manager_view:
+                self.risk_manager_view.router = self.order_router
+                try:
+                    self.risk_manager_view.risk_parameters_updated.connect(
+                        lambda m, c, s: self.order_router.update_risk_parameters(m, c, s, enforce=True)
+                    )
+                    self.risk_manager_view.risk_config_updated.connect(
+                        lambda m, c, r, s, d: self.order_router.update_risk_parameters(m, c, s, risk_percentage=r, daily_drawdown_pct=d, enforce=True)
                     )
                 except Exception:
                     pass

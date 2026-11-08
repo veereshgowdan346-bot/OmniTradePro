@@ -188,7 +188,9 @@ class OrderRouter:
         # Front-page Execution Mode & Risk Controller State
         self.execution_mode: str = "PAPER"
         self.user_trade_capital: float = 1000.0
+        self.user_risk_percentage: float = 5.0
         self.user_max_sl: float = 80.0
+        self.user_daily_drawdown_pct: float = 10.0
         self.enforce_user_risk_limits: bool = False
         self._load_execution_config()
 
@@ -202,8 +204,16 @@ class OrderRouter:
                 cfg = self.db_manager.get_execution_config()
                 self.execution_mode = str(cfg.get("mode", "PAPER")).strip().upper()
                 self.user_trade_capital = float(cfg.get("trade_capital", 1000.0))
+                self.user_risk_percentage = float(cfg.get("risk_percentage", 5.0))
                 self.user_max_sl = float(cfg.get("max_sl", 80.0))
-                RiskBudget.update_risk_parameters(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+                self.user_daily_drawdown_pct = float(cfg.get("daily_drawdown_pct", 10.0))
+                RiskBudget.update_risk_parameters(
+                    mode=self.execution_mode,
+                    trade_capital=self.user_trade_capital,
+                    max_sl=self.user_max_sl,
+                    risk_percentage=self.user_risk_percentage,
+                    daily_drawdown_pct=self.user_daily_drawdown_pct
+                )
         except Exception:
             pass
 
@@ -212,6 +222,8 @@ class OrderRouter:
         mode: str,
         trade_capital: float,
         max_sl: float,
+        risk_percentage: Optional[float] = None,
+        daily_drawdown_pct: Optional[float] = None,
         enforce: bool = True
     ) -> None:
         """
@@ -223,13 +235,31 @@ class OrderRouter:
             self.execution_mode = clean_mode
         if trade_capital > 0:
             self.user_trade_capital = float(trade_capital)
+        if risk_percentage is not None and float(risk_percentage) > 0:
+            self.user_risk_percentage = float(risk_percentage)
+        elif trade_capital > 0 and max_sl > 0:
+            self.user_risk_percentage = round((float(max_sl) / float(trade_capital)) * 100.0, 1)
         if max_sl > 0:
             self.user_max_sl = float(max_sl)
+        if daily_drawdown_pct is not None and float(daily_drawdown_pct) > 0:
+            self.user_daily_drawdown_pct = float(daily_drawdown_pct)
         self.enforce_user_risk_limits = bool(enforce)
-        RiskBudget.update_risk_parameters(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+        RiskBudget.update_risk_parameters(
+            mode=self.execution_mode,
+            trade_capital=self.user_trade_capital,
+            max_sl=self.user_max_sl,
+            risk_percentage=self.user_risk_percentage,
+            daily_drawdown_pct=self.user_daily_drawdown_pct
+        )
         if hasattr(self.db_manager, "save_execution_config"):
             try:
-                self.db_manager.save_execution_config(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+                self.db_manager.save_execution_config(
+                    mode=self.execution_mode,
+                    trade_capital=self.user_trade_capital,
+                    max_sl=self.user_max_sl,
+                    risk_percentage=self.user_risk_percentage,
+                    daily_drawdown_pct=self.user_daily_drawdown_pct
+                )
             except Exception:
                 pass
 
@@ -340,11 +370,13 @@ class OrderRouter:
                 "message": "Daily loss limit exceeded. Trading engine locked."
             }
 
-        # Dynamic Circuit Breaker: Realized loss >= (user_max_sl * 2.5) or daily floor
+        # Dynamic Circuit Breaker: Realized loss >= (user_max_sl * 2.5) or dynamic daily floor
         daily_realized = abs(self._daily_loss_tracker.get("realized", 0.0))
+        daily_floor = round(self.user_trade_capital * (self.user_daily_drawdown_pct / 100.0), 2)
         cb_tripped, cb_reason = RiskBudget.is_circuit_breaker_tripped(
             cumulative_realized_loss=daily_realized,
-            user_max_sl=self.user_max_sl
+            user_max_sl=self.user_max_sl,
+            daily_floor=daily_floor
         )
         if cb_tripped:
             self._engine_locked = True

@@ -28,11 +28,20 @@ class RiskBudget:
     # Front-page execution and risk controller state
     _current_mode: str = "PAPER"
     _user_trade_capital: float = 1000.0
+    _user_risk_percentage: float = 5.0
     _user_max_sl: float = 80.0
+    _user_daily_drawdown_pct: float = 10.0
 
     @classmethod
-    def update_risk_parameters(cls, mode: str, trade_capital: float, max_sl: float) -> None:
-        """Global update hook called when front-page risk controller applies new rules."""
+    def update_risk_parameters(
+        cls,
+        mode: str,
+        trade_capital: float,
+        max_sl: float,
+        risk_percentage: Optional[float] = None,
+        daily_drawdown_pct: Optional[float] = None
+    ) -> None:
+        """Global update hook called when front-page or RMS risk controller applies new rules."""
         clean_mode = str(mode).strip().upper()
         if clean_mode in ("PAPER", "LIVE"):
             cls._current_mode = clean_mode
@@ -40,6 +49,14 @@ class RiskBudget:
             cls._user_trade_capital = float(trade_capital)
         if max_sl > 0:
             cls._user_max_sl = float(max_sl)
+        if risk_percentage is not None and float(risk_percentage) > 0:
+            cls._user_risk_percentage = float(risk_percentage)
+            cls.MAX_CAPITAL_RISK_RATIO = float(risk_percentage) / 100.0
+        elif trade_capital > 0 and max_sl > 0:
+            cls._user_risk_percentage = round((float(max_sl) / float(trade_capital)) * 100.0, 1)
+            cls.MAX_CAPITAL_RISK_RATIO = cls._user_risk_percentage / 100.0
+        if daily_drawdown_pct is not None and float(daily_drawdown_pct) > 0:
+            cls._user_daily_drawdown_pct = float(daily_drawdown_pct)
 
     @classmethod
     def get_risk_parameters(cls) -> Dict[str, Any]:
@@ -47,7 +64,9 @@ class RiskBudget:
         return {
             "mode": cls._current_mode,
             "trade_capital": cls._user_trade_capital,
-            "max_sl": cls._user_max_sl
+            "risk_percentage": cls._user_risk_percentage,
+            "max_sl": cls._user_max_sl,
+            "daily_drawdown_pct": cls._user_daily_drawdown_pct
         }
 
     @classmethod
@@ -115,18 +134,20 @@ class RiskBudget:
         cls,
         cumulative_realized_loss: float,
         user_max_sl: float,
-        daily_floor: float = 2000.0
+        daily_floor: Optional[float] = None
     ) -> tuple[bool, str]:
         """
-        Checks if cumulative intraday realized loss >= (user_max_sl * 2.5) or daily floor.
+        Checks if cumulative intraday realized loss >= (user_max_sl * 2.5) or dynamic daily floor.
         Returns: (is_tripped: bool, reason: str)
         """
         loss = abs(float(cumulative_realized_loss))
         sl_threshold = round(user_max_sl * 2.5, 2)
         if loss >= sl_threshold:
             return True, f"Cumulative intraday realized loss ₹{loss:.2f} >= 2.5x max SL limit (₹{sl_threshold:.2f})."
-        if loss >= daily_floor:
-            return True, f"Cumulative intraday realized loss ₹{loss:.2f} >= statutory daily floor (₹{daily_floor:.2f})."
+        
+        effective_floor = daily_floor if (daily_floor is not None and daily_floor > 0) else round(cls._user_trade_capital * (cls._user_daily_drawdown_pct / 100.0), 2)
+        if effective_floor > 0 and loss >= effective_floor:
+            return True, f"Cumulative intraday realized loss ₹{loss:.2f} >= statutory daily floor (₹{effective_floor:.2f})."
         return False, "OK"
 
     @classmethod
@@ -183,12 +204,13 @@ class RiskBudget:
         entry_price: float,
         stop_loss: float,
         target_price: float,
-        margin_leverage: float = 5.0
+        margin_leverage: float = 5.0,
+        risk_ratio: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Calculates exact share sizing and evaluates statutory fee hurdle clearance.
         Formula:
-            Max Risk = Capital * 0.10
+            Max Risk = Capital * Risk Ratio (default user_risk_percentage / 100.0)
             Per Share Risk = |Entry Price - Stop Loss|
             Quantity = max(1, floor(Max Risk / Per Share Risk))
         """
@@ -197,8 +219,9 @@ class RiskBudget:
         if entry_price <= 0.0:
             raise ValueError(f"Entry price must be > 0, got {entry_price}")
 
-        # 1. Compute Max Risk (10% of Capital)
-        max_risk = capital_inr * cls.MAX_CAPITAL_RISK_RATIO
+        # 1. Compute Max Risk (Dynamic user risk percentage or custom ratio)
+        effective_ratio = float(risk_ratio) if (risk_ratio is not None and risk_ratio > 0) else (cls._user_risk_percentage / 100.0)
+        max_risk = capital_inr * effective_ratio
 
         # 2. Compute Per-Share Risk
         per_share_risk = abs(entry_price - stop_loss)

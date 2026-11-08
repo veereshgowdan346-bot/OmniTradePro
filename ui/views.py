@@ -49,27 +49,66 @@ except ImportError:
     class QHBoxLayout(QVBoxLayout): pass
     class QGridLayout(QVBoxLayout):
         def addWidget(self, w, r, c, rs=1, cs=1): pass
+    class _TextStr(str):
+        def __call__(self): return str(self)
     class QLabel:
-        def __init__(self, text="", parent=None): self.text = text
-        def setText(self, t): self.text = t
+        def __init__(self, text="", parent=None): self.text = _TextStr(text)
+        def setText(self, t): self.text = _TextStr(t)
         def setStyleSheet(self, s): pass
+        def setAlignment(self, a): pass
+        def setProperty(self, k, v): pass
+        def setVisible(self, v): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setFixedSize(self, w, h): pass
+    class Signal:
+        def __init__(self, *types):
+            self._callbacks = []
+        def connect(self, cb):
+            self._callbacks.append(cb)
+        def emit(self, *args):
+            for cb in list(self._callbacks):
+                try:
+                    cb(*args)
+                except Exception:
+                    pass
     class QPushButton:
-        def __init__(self, text="", parent=None): self.text = text
+        def __init__(self, text="", parent=None):
+            self.text = text
+            self.clicked = Signal()
+        def setText(self, t): self.text = t
         def setStyleSheet(self, s): pass
         def setFixedWidth(self, w): pass
         def setFixedHeight(self, h): pass
         def setEnabled(self, e): pass
-        def clicked(self): pass
     class QComboBox:
         def __init__(self, parent=None): pass
         def addItems(self, items): pass
         def currentText(self): return ""
     class QSpinBox:
-        def __init__(self, parent=None): pass
+        def __init__(self, parent=None):
+            self._val = 0
+            self.valueChanged = Signal()
         def setRange(self, a, b): pass
-        def setValue(self, v): pass
-        def value(self): return 1
-    class QDoubleSpinBox(QSpinBox): pass
+        def setSingleStep(self, s): pass
+        def setPrefix(self, p): pass
+        def setSuffix(self, s): pass
+        def setDecimals(self, d): pass
+        def setValue(self, v):
+            self._val = v
+            try:
+                self.valueChanged.emit(self._val)
+            except Exception:
+                pass
+        def value(self): return self._val
+        def setStyleSheet(self, s): pass
+        def setFixedHeight(self, h): pass
+        def setFixedWidth(self, w): pass
+    class QDoubleSpinBox(QSpinBox):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._val = 0.0
+        def value(self): return float(self._val)
     class QLineEdit:
         Normal = 0
         Password = 1
@@ -106,10 +145,6 @@ except ImportError:
         def information(p, t, m): pass
         @staticmethod
         def warning(p, t, m): pass
-    class Signal:
-        def __init__(self, *types): pass
-        def connect(self, cb): pass
-        def emit(self, *args): pass
     class Qt:
         AlignCenter = 0x0004
         AlignLeft = 0x0001
@@ -540,32 +575,235 @@ class PortfolioView(BasePageView):
 
 
 class RiskManagerView(BasePageView):
-    """Page 9: RMS settings, 10% risk floor, daily loss kill-switch threshold."""
+    """
+    Page 9: RMS settings, dynamic capital controls, risk percentages,
+    ruin floor circuit breaker limits, emergency square-off protocols, and risk floors.
+    """
+    _all_instances: List["RiskManagerView"] = []
+    risk_parameters_updated = Signal(str, float, float)
+    risk_config_updated = Signal(str, float, float, float, float)
 
-    def __init__(self, parent=None) -> None:
-        super().__init__("🛡 RISK MANAGEMENT SYSTEM (RMS)", "Configure circuit breaker limits, emergency square-off protocols, and risk floors.", parent)
+    def __init__(self, parent=None, router=None) -> None:
+        super().__init__(
+            "🛡 RISK MANAGEMENT SYSTEM (RMS)",
+            "Configure dynamic capital allocation, risk percentages, ruin floor circuit breakers, and emergency square-off protocols.",
+            parent
+        )
+        RiskManagerView._all_instances.append(self)
+        self.router = router
+        self.db = DatabaseHandler()
         self.risk_engine = RiskEngine()
+        self.current_mode: str = "PAPER"
+        self._is_calculating: bool = False
         self._init_body()
+        self._load_config()
 
     def _init_body(self) -> None:
-        card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
-        cl = QVBoxLayout(card)
+        # Card 1: Dynamic Admin Risk & Capital Controls
+        card_admin = QFrame(self.container)
+        card_admin.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 16px;")
+        al = QVBoxLayout(card_admin)
+        al.setSpacing(12)
+
+        lbl_admin_title = QLabel("⚡ DYNAMIC ADMIN RISK & CAPITAL ALLOCATION", card_admin)
+        lbl_admin_title.setStyleSheet("color: #00e5ff; font-weight: 800; font-size: 13px; letter-spacing: 0.5px;")
+        al.addWidget(lbl_admin_title)
+
+        lbl_admin_desc = QLabel(
+            "Configure mathematical capital ceilings, risk percentages, per-trade stop-loss, and daily ruin floor circuit breakers.",
+            card_admin
+        )
+        lbl_admin_desc.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        al.addWidget(lbl_admin_desc)
+
+        # 4 Interactive Controls Form
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(8)
+
+        # Control 1: Allocated Trading Capital
+        r_cap = QHBoxLayout()
+        lbl_c = QLabel("Allocated Trading Capital (₹):", card_admin)
+        lbl_c.setStyleSheet("color: #f8fafc; font-weight: 600; font-size: 11px;")
+        self.spin_capital = QDoubleSpinBox(card_admin)
+        self.spin_capital.setRange(500.0, 1000000.0)
+        self.spin_capital.setSingleStep(500.0)
+        self.spin_capital.setValue(1000.0)
+        self.spin_capital.setPrefix("₹ ")
+        self.spin_capital.setDecimals(0)
+        self.spin_capital.setFixedHeight(28)
+        self.spin_capital.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #070d18;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                color: #ffffff;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+        """)
+        r_cap.addWidget(lbl_c)
+        r_cap.addStretch()
+        r_cap.addWidget(self.spin_capital)
+        form_layout.addLayout(r_cap)
+
+        # Control 2: Max Risk / Loss Percentage per Trade (%)
+        r_risk = QHBoxLayout()
+        lbl_r = QLabel("Max Risk / Loss Percentage per Trade (%):", card_admin)
+        lbl_r.setStyleSheet("color: #f8fafc; font-weight: 600; font-size: 11px;")
+        self.spin_risk_pct = QDoubleSpinBox(card_admin)
+        self.spin_risk_pct.setRange(0.5, 50.0)
+        self.spin_risk_pct.setSingleStep(0.5)
+        self.spin_risk_pct.setValue(5.0)
+        self.spin_risk_pct.setSuffix(" %")
+        self.spin_risk_pct.setDecimals(1)
+        self.spin_risk_pct.setFixedHeight(28)
+        self.spin_risk_pct.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #070d18;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                color: #00e5ff;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+        """)
+        r_risk.addWidget(lbl_r)
+        r_risk.addStretch()
+        r_risk.addWidget(self.spin_risk_pct)
+        form_layout.addLayout(r_risk)
+
+        # Control 3: Calculated Max Rupee Risk per Trade (₹)
+        r_sl = QHBoxLayout()
+        lbl_s = QLabel("Calculated Max Rupee Risk per Trade (₹):", card_admin)
+        lbl_s.setStyleSheet("color: #f8fafc; font-weight: 600; font-size: 11px;")
+        self.spin_max_sl = QDoubleSpinBox(card_admin)
+        self.spin_max_sl.setRange(10.0, 50000.0)
+        self.spin_max_sl.setSingleStep(10.0)
+        self.spin_max_sl.setValue(50.0)
+        self.spin_max_sl.setPrefix("₹ ")
+        self.spin_max_sl.setDecimals(0)
+        self.spin_max_sl.setFixedHeight(28)
+        self.spin_max_sl.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #070d18;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                color: #ff5252;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+        """)
+        r_sl.addWidget(lbl_s)
+        r_sl.addStretch()
+        r_sl.addWidget(self.spin_max_sl)
+        form_layout.addLayout(r_sl)
+
+        # Control 4: Daily Drawdown Circuit Breaker Limit (%)
+        r_dd = QHBoxLayout()
+        lbl_d = QLabel("Daily Drawdown Circuit Breaker Limit (%):", card_admin)
+        lbl_d.setStyleSheet("color: #f8fafc; font-weight: 600; font-size: 11px;")
+        self.spin_drawdown_pct = QDoubleSpinBox(card_admin)
+        self.spin_drawdown_pct.setRange(2.0, 50.0)
+        self.spin_drawdown_pct.setSingleStep(1.0)
+        self.spin_drawdown_pct.setValue(10.0)
+        self.spin_drawdown_pct.setSuffix(" %")
+        self.spin_drawdown_pct.setDecimals(1)
+        self.spin_drawdown_pct.setFixedHeight(28)
+        self.spin_drawdown_pct.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #070d18;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                color: #ffab00;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+        """)
+        r_dd.addWidget(lbl_d)
+        r_dd.addStretch()
+        r_dd.addWidget(self.spin_drawdown_pct)
+        form_layout.addLayout(r_dd)
+
+        al.addLayout(form_layout)
+
+        # Connect mutual auto-calculation
+        try:
+            self.spin_capital.valueChanged.connect(self._on_capital_or_risk_changed)
+            self.spin_risk_pct.valueChanged.connect(self._on_capital_or_risk_changed)
+            self.spin_max_sl.valueChanged.connect(self._on_max_sl_changed)
+            self.spin_drawdown_pct.valueChanged.connect(self._on_drawdown_changed)
+        except Exception:
+            pass
+
+        # Ruin Floor Display Label
+        self.lbl_ruin_floor = QLabel("Dynamic Ruin Floor: ₹100.00 (Max cumulative loss before engine hard lock)", card_admin)
+        self.lbl_ruin_floor.setStyleSheet("color: #ffab00; font-weight: bold; font-size: 11px; font-family: 'Consolas', monospace;")
+        al.addWidget(self.lbl_ruin_floor)
+
+        # Save Button & Status Row
+        btn_row = QHBoxLayout()
+        self.btn_save = QPushButton("💾 Save & Apply Risk Config", card_admin)
+        self.btn_save.setFixedHeight(34)
+        self.btn_save.setStyleSheet("""
+            QPushButton {
+                background-color: #08283d;
+                border: 1.5px solid #00e5ff;
+                color: #00e5ff;
+                font-weight: 800;
+                font-size: 12px;
+                padding: 8px 18px;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #00e5ff;
+                color: #070d18;
+            }
+            QPushButton:pressed {
+                background-color: #00b4d8;
+                color: #070d18;
+            }
+        """)
+        try:
+            self.btn_save.clicked.connect(self._save_risk_config)
+        except Exception:
+            pass
+        btn_row.addWidget(self.btn_save)
+
+        self.lbl_save_status = QLabel("", card_admin)
+        self.lbl_save_status.setStyleSheet("color: #00e676; font-weight: bold; font-size: 11px;")
+        btn_row.addWidget(self.lbl_save_status)
+        btn_row.addStretch()
+        al.addLayout(btn_row)
+
+        self.layout_main.addWidget(card_admin)
+
+        # Card 2: Circuit Breaker Controls & Manual Panic Halt
+        card_cb = QFrame(self.container)
+        card_cb.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        cl = QVBoxLayout(card_cb)
         cl.setSpacing(10)
 
-        cl.addWidget(QLabel("CIRCUIT BREAKER CONTROLS", card))
+        cl.addWidget(QLabel("🚨 EMERGENCY CIRCUIT BREAKER & MANUAL OVERRIDE", card_cb))
 
-        self.lbl_status = QLabel("Status: <span style='color:#00e676; font-weight:bold;'>NORMAL (Trading Authorized)</span>", card)
+        self.lbl_status = QLabel("Status: <span style='color:#00e676; font-weight:bold;'>NORMAL (Trading Authorized)</span>", card_cb)
         cl.addWidget(self.lbl_status)
 
-        btn_halt = QPushButton("ENGAGE MANUAL PANIC HALT", card)
+        btn_halt = QPushButton("ENGAGE MANUAL PANIC HALT", card_cb)
         btn_halt.setStyleSheet("background-color: rgba(255, 23, 68, 0.2); border: 1.5px solid #ff1744; color: #ff5252; font-weight: bold; padding: 10px; border-radius: 6px;")
         try:
             btn_halt.clicked.connect(self._manual_halt)
         except Exception:
             pass
 
-        btn_reset = QPushButton("Reset Circuit Breaker (Admin Override)", card)
+        btn_reset = QPushButton("Reset Circuit Breaker (Admin Override)", card_cb)
         btn_reset.setStyleSheet("background-color: #2979ff; color: white; font-weight: bold; padding: 10px; border-radius: 6px; border: none;")
         try:
             btn_reset.clicked.connect(self._reset_breaker)
@@ -574,7 +812,183 @@ class RiskManagerView(BasePageView):
 
         cl.addWidget(btn_halt)
         cl.addWidget(btn_reset)
-        self.layout_main.addWidget(card)
+        self.layout_main.addWidget(card_cb)
+
+    def _on_capital_or_risk_changed(self, *args) -> None:
+        """Auto-computes Max SL from Capital and Risk Percentage."""
+        if self._is_calculating:
+            return
+        self._is_calculating = True
+        try:
+            cap = float(self.spin_capital.value())
+            pct = float(self.spin_risk_pct.value())
+            calc_sl = max(1.0, round(cap * (pct / 100.0), 2))
+            self.spin_max_sl.setValue(calc_sl)
+            self._update_ruin_floor_display()
+        except Exception:
+            pass
+        finally:
+            self._is_calculating = False
+
+    def _on_max_sl_changed(self, *args) -> None:
+        """Auto-computes Risk Percentage from Max SL and Capital."""
+        if self._is_calculating:
+            return
+        self._is_calculating = True
+        try:
+            cap = float(self.spin_capital.value())
+            sl = float(self.spin_max_sl.value())
+            if cap > 0:
+                pct = round((sl / cap) * 100.0, 1)
+                pct = max(0.5, min(50.0, pct))
+                self.spin_risk_pct.setValue(pct)
+            self._update_ruin_floor_display()
+        except Exception:
+            pass
+        finally:
+            self._is_calculating = False
+
+    def _on_drawdown_changed(self, *args) -> None:
+        """Updates ruin floor display when drawdown % changes."""
+        self._update_ruin_floor_display()
+
+    def _update_ruin_floor_display(self) -> None:
+        try:
+            cap = float(self.spin_capital.value())
+            dd_pct = float(self.spin_drawdown_pct.value())
+            ruin_amt = round(cap * (dd_pct / 100.0), 2)
+            self.lbl_ruin_floor.setText(
+                f"Dynamic Ruin Floor: ₹{ruin_amt:,.2f} ({dd_pct:.1f}% of ₹{cap:,.0f} capital - engine hard lock threshold)"
+            )
+        except Exception:
+            pass
+
+    def _load_config(self) -> None:
+        """Pulls saved configuration from SQLite table `execution_config`."""
+        try:
+            cfg = self.db.get_execution_config()
+            self.current_mode = str(cfg.get("mode", "PAPER")).upper()
+            cap = float(cfg.get("trade_capital", 1000.0))
+            risk_pct = float(cfg.get("risk_percentage", 5.0))
+            max_sl = float(cfg.get("max_sl", 80.0))
+            drawdown_pct = float(cfg.get("daily_drawdown_pct", 10.0))
+
+            self._is_calculating = True
+            self.spin_capital.setValue(cap)
+            self.spin_risk_pct.setValue(risk_pct)
+            self.spin_max_sl.setValue(max_sl)
+            self.spin_drawdown_pct.setValue(drawdown_pct)
+            self._is_calculating = False
+
+            self._update_ruin_floor_display()
+        except Exception:
+            self._is_calculating = False
+
+    def sync_from_external(
+        self,
+        capital: float,
+        risk_pct: float,
+        max_sl: float,
+        daily_drawdown: float,
+        mode: Optional[str] = None
+    ) -> None:
+        """Called externally from QuickRiskControlWidget to keep parameters synchronized."""
+        self._is_calculating = True
+        try:
+            if mode:
+                self.current_mode = str(mode).strip().upper()
+            self.spin_capital.setValue(capital)
+            self.spin_risk_pct.setValue(risk_pct)
+            self.spin_max_sl.setValue(max_sl)
+            self.spin_drawdown_pct.setValue(daily_drawdown)
+            self._update_ruin_floor_display()
+            self.lbl_save_status.setText("✓ Synchronized with Execution Controller")
+            self.lbl_save_status.setStyleSheet("color: #00e5ff; font-weight: bold; font-size: 11px;")
+        except Exception:
+            pass
+        finally:
+            self._is_calculating = False
+
+    def _save_risk_config(self) -> None:
+        """Persists updated risk controls, broadcasts to RiskBudget and OrderRouter, and updates UI."""
+        cap = float(self.spin_capital.value())
+        risk_pct = float(self.spin_risk_pct.value())
+        sl = float(self.spin_max_sl.value())
+        dd_pct = float(self.spin_drawdown_pct.value())
+
+        # 1. Commit to SQLite
+        try:
+            self.db.save_execution_config(
+                mode=self.current_mode,
+                trade_capital=cap,
+                max_sl=sl,
+                risk_percentage=risk_pct,
+                daily_drawdown_pct=dd_pct
+            )
+        except Exception:
+            pass
+
+        # 2. Update RiskBudget
+        from core.risk_budget import RiskBudget
+        RiskBudget.update_risk_parameters(
+            mode=self.current_mode,
+            trade_capital=cap,
+            max_sl=sl,
+            risk_percentage=risk_pct,
+            daily_drawdown_pct=dd_pct
+        )
+
+        # 3. Update router if attached
+        if self.router and hasattr(self.router, "update_risk_parameters"):
+            try:
+                self.router.update_risk_parameters(
+                    mode=self.current_mode,
+                    trade_capital=cap,
+                    max_sl=sl,
+                    risk_percentage=risk_pct,
+                    daily_drawdown_pct=dd_pct,
+                    enforce=True
+                )
+            except Exception:
+                pass
+
+        # 4. Synchronize all QuickRiskControlWidget instances
+        try:
+            from ui.quick_risk_widget import QuickRiskControlWidget
+            for inst in list(getattr(QuickRiskControlWidget, "_all_instances", [])):
+                inst.sync_from_external(cap, risk_pct, sl, dd_pct, mode=self.current_mode)
+        except Exception:
+            pass
+
+        # 5. Synchronize other RiskManagerView instances
+        for inst in list(RiskManagerView._all_instances):
+            if inst is not self:
+                try:
+                    inst.sync_from_external(cap, risk_pct, sl, dd_pct, mode=self.current_mode)
+                except Exception:
+                    pass
+
+        # 6. Synchronize any active RiskManagerCard instances
+        try:
+            from ui.dashboard import RiskManagerCard
+            for rc in list(getattr(RiskManagerCard, "_all_instances", [])):
+                rc.update_config(cap, risk_pct, dd_pct)
+        except Exception:
+            pass
+
+        # 7. Status confirmation badge
+        ruin_amt = round(cap * (dd_pct / 100.0), 2)
+        self.lbl_save_status.setText(
+            f"✓ Risk Parameters Saved & Enforced: Capital ₹{cap:,.0f} | Risk {risk_pct:.1f}% | SL ₹{sl:,.0f} | Ruin Floor ₹{ruin_amt:,.0f} ({dd_pct:.1f}%)"
+        )
+        self.lbl_save_status.setStyleSheet("color: #00e676; font-weight: bold; font-size: 11px;")
+
+        # 7. Emit signals
+        try:
+            self.risk_parameters_updated.emit(self.current_mode, cap, sl)
+            self.risk_config_updated.emit(self.current_mode, cap, risk_pct, sl, dd_pct)
+        except Exception:
+            pass
 
     def _manual_halt(self) -> None:
         self.risk_engine.is_halted = True

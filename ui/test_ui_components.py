@@ -260,6 +260,7 @@ def run_tests() -> bool:
         # Test applying new parameters from sidebar
         w_side.current_mode = "LIVE"
         w_side.spin_capital.setValue(2500.0)
+        w_side.spin_risk_pct.setValue(4.8)
         w_side.spin_max_sl.setValue(120.0)
         w_side._on_apply_clicked()
 
@@ -267,11 +268,13 @@ def run_tests() -> bool:
         db_cfg = win.db.get_execution_config()
         assert db_cfg["mode"] == "LIVE", f"Expected mode LIVE in SQLite, got {db_cfg['mode']}"
         assert db_cfg["trade_capital"] == 2500.0, f"Expected capital 2500 in SQLite, got {db_cfg['trade_capital']}"
+        assert db_cfg["risk_percentage"] == 4.8, f"Expected risk_percentage 4.8 in SQLite, got {db_cfg.get('risk_percentage')}"
         assert db_cfg["max_sl"] == 120.0, f"Expected max_sl 120 in SQLite, got {db_cfg['max_sl']}"
 
         # Verify two-way synchronization between sidebar and dashboard risk widgets
         assert w_dash.current_mode == "LIVE", "Dashboard risk widget failed to synchronize mode"
         assert w_dash.spin_capital.value() == 2500.0, "Dashboard risk widget failed to synchronize capital"
+        assert w_dash.spin_risk_pct.value() == 4.8, "Dashboard risk widget failed to synchronize risk_pct"
         assert w_dash.spin_max_sl.value() == 120.0, "Dashboard risk widget failed to synchronize max_sl"
         assert "2,500" in w_dash.lbl_status.text()
         assert "120" in w_dash.lbl_status.text()
@@ -279,11 +282,13 @@ def run_tests() -> bool:
         # Verify OrderRouter received parameters
         assert win.order_router.execution_mode == "LIVE"
         assert win.order_router.user_trade_capital == 2500.0
+        assert win.order_router.user_risk_percentage == 4.8
         assert win.order_router.user_max_sl == 120.0
 
         # Reset back to default PAPER mode
         w_side.current_mode = "PAPER"
         w_side.spin_capital.setValue(1000.0)
+        w_side.spin_risk_pct.setValue(5.0)
         w_side.spin_max_sl.setValue(80.0)
         w_side._on_apply_clicked()
 
@@ -293,8 +298,92 @@ def run_tests() -> bool:
 
         print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Front-Page Risk Controller Verified: Mode toggle, capital limit, max SL, and live two-way sync certified")
 
+        # =====================================================================
+        # 10. Dynamic Admin Risk Management Controls & Global Two-Way Sync Test
+        # =====================================================================
+        print(f"\n{ANSI.YELLOW}{ANSI.BOLD}▶ 10. DYNAMIC ADMIN RISK MANAGEMENT & GLOBAL TWO-WAY SYNC TEST{ANSI.RESET}")
+        print(f"  {'-' * 76}")
+
+        rm_view = win.risk_manager_view
+        assert rm_view is not None, "MainWindow missing risk_manager_view"
+        assert hasattr(rm_view, "spin_capital"), "RiskManagerView missing spin_capital"
+        assert hasattr(rm_view, "spin_risk_pct"), "RiskManagerView missing spin_risk_pct"
+        assert hasattr(rm_view, "spin_max_sl"), "RiskManagerView missing spin_max_sl"
+        assert hasattr(rm_view, "spin_drawdown_pct"), "RiskManagerView missing spin_drawdown_pct"
+        assert hasattr(rm_view, "btn_save"), "RiskManagerView missing btn_save"
+
+        # 1. Test Admin modifications in RiskManagerView
+        rm_view.spin_capital.setValue(5000.0)
+        rm_view.spin_risk_pct.setValue(4.0)
+        # Verify mutual calculation: 5000 * 0.04 = 200.0
+        rm_view._on_capital_or_risk_changed()
+        assert rm_view.spin_max_sl.value() == 200.0, f"Expected calculated Max SL ₹200.0, got {rm_view.spin_max_sl.value()}"
+
+        rm_view.spin_drawdown_pct.setValue(15.0)
+        rm_view._update_ruin_floor_display()
+        # Verify Ruin floor display: 5000 * 0.15 = 750.0
+        assert "750" in rm_view.lbl_ruin_floor.text(), f"Expected ₹750 ruin floor in label, got {rm_view.lbl_ruin_floor.text()}"
+
+        # 2. Trigger Admin Save Action: [ 💾 Save & Apply Risk Config ]
+        rm_view._save_risk_config()
+        assert "Saved & Enforced" in rm_view.lbl_save_status.text()
+
+        # 3. Verify SQLite Persistence across both handlers
+        cfg_db = win.db.get_execution_config()
+        assert cfg_db["trade_capital"] == 5000.0, f"Expected capital 5000 in DB, got {cfg_db['trade_capital']}"
+        assert cfg_db["risk_percentage"] == 4.0, f"Expected risk_percentage 4.0 in DB, got {cfg_db['risk_percentage']}"
+        assert cfg_db["max_sl"] == 200.0, f"Expected max_sl 200 in DB, got {cfg_db['max_sl']}"
+        assert cfg_db["daily_drawdown_pct"] == 15.0, f"Expected daily_drawdown_pct 15.0 in DB, got {cfg_db['daily_drawdown_pct']}"
+
+        # 4. Verify Global Synchronization into Front-Page Widgets
+        assert w_side.spin_capital.value() == 5000.0, "Sidebar risk widget failed to sync capital from RMS view"
+        assert w_side.spin_risk_pct.value() == 4.0, "Sidebar risk widget failed to sync risk % from RMS view"
+        assert w_side.spin_max_sl.value() == 200.0, "Sidebar risk widget failed to sync max SL from RMS view"
+
+        assert w_dash.spin_capital.value() == 5000.0, "Dashboard risk widget failed to sync capital from RMS view"
+        assert w_dash.spin_risk_pct.value() == 4.0, "Dashboard risk widget failed to sync risk % from RMS view"
+        assert w_dash.spin_max_sl.value() == 200.0, "Dashboard risk widget failed to sync max SL from RMS view"
+
+        # 5. Verify Dashboard RiskManagerCard Dynamic Update
+        assert "750" in win.risk_card.v_limit.text(), f"Expected ₹750 limit in RiskManagerCard, got {win.risk_card.v_limit.text()}"
+        assert "4.0%" in win.risk_card.v_floor.text(), f"Expected 4.0% floor in RiskManagerCard, got {win.risk_card.v_floor.text()}"
+
+        # 6. Verify Backend Risk Engines Updated
+        from core.risk_budget import RiskBudget
+        rb_params = RiskBudget.get_risk_parameters()
+        assert rb_params["trade_capital"] == 5000.0
+        assert rb_params["risk_percentage"] == 4.0
+        assert rb_params["max_sl"] == 200.0
+        assert rb_params["daily_drawdown_pct"] == 15.0
+
+        assert win.order_router.user_trade_capital == 5000.0
+        assert win.order_router.user_risk_percentage == 4.0
+        assert win.order_router.user_max_sl == 200.0
+        assert win.order_router.user_daily_drawdown_pct == 15.0
+
+        # 7. Reverse Two-Way Sync: Modify from Front-Page Widget -> Updates RMS View
+        w_side.spin_capital.setValue(3000.0)
+        w_side.spin_risk_pct.setValue(5.0)
+        w_side.spin_max_sl.setValue(150.0)
+        w_side._on_apply_clicked()
+
+        assert rm_view.spin_capital.value() == 3000.0, "RiskManagerView failed to sync capital from widget"
+        assert rm_view.spin_risk_pct.value() == 5.0, "RiskManagerView failed to sync risk % from widget"
+        assert rm_view.spin_max_sl.value() == 150.0, "RiskManagerView failed to sync max SL from widget"
+        assert "450" in win.risk_card.v_limit.text(), f"Expected ₹450 limit in RiskManagerCard, got {win.risk_card.v_limit.text()}"
+        assert "5.0%" in win.risk_card.v_floor.text(), f"Expected 5.0% floor in RiskManagerCard, got {win.risk_card.v_floor.text()}"
+
+        # Reset back to default for clean state
+        w_side.current_mode = "PAPER"
+        w_side.spin_capital.setValue(1000.0)
+        w_side.spin_risk_pct.setValue(5.0)
+        w_side.spin_max_sl.setValue(80.0)
+        w_side._on_apply_clicked()
+
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Dynamic Admin Risk Management Certified: Capital, Risk %, SL, Ruin Floor, and Two-Way Global Sync fully validated")
+
         print("\n" + "=" * 80)
-        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL 9 UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
+        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL 10 UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
         print(f"{ANSI.GREEN}Frosted glassmorphism theme, multi-broker vault, high-performance charting,")
         print(f"risk-gated order dispatch, and main window orchestrator are ready for production.{ANSI.RESET}\n")
 
