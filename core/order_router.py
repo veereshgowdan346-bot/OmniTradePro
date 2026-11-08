@@ -51,12 +51,14 @@ class OrderRouter:
     FRICTION_COST_INR = 60.0
     MIN_GROSS_PROFIT_HURDLE_INR = 70.0
     MAX_DRAWDOWN_PCT = 10.0
+    MAX_TRADES_PER_INSTRUMENT_PER_DAY = 2
 
     def __init__(
         self,
         db_manager: Optional[DatabaseManager] = None,
         db_handler=None,
         vault_manager=None,
+        enforce_daily_trade_cap: bool = False,
         **kwargs
     ) -> None:
         self.db_manager = db_manager or db_handler or DatabaseManager()
@@ -74,6 +76,10 @@ class OrderRouter:
 
         # Open Positions Tracker (trade_id -> position dict)
         self._open_positions: Dict[int, Dict[str, Any]] = {}
+
+        # Daily trade execution counter: date_str -> {symbol -> count}
+        self.enforce_daily_trade_cap = enforce_daily_trade_cap
+        self._daily_trade_counts: Dict[str, Dict[str, int]] = {}
 
         # Broker Toggle Matrix: broker_name -> bool {ON/OFF state}
         self._broker_toggles: Dict[str, bool] = {
@@ -180,6 +186,7 @@ class OrderRouter:
         exchange: str = "NSE",
         order_type: str = "MARKET",
         product: str = "MIS",
+        enforce_daily_cap: Optional[bool] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -199,6 +206,23 @@ class OrderRouter:
                 "reason": "ENGINE_LOCKED",
                 "message": "Daily loss limit exceeded. Trading engine locked."
             }
+
+        # === CHECK: Daily Trade Cap (Strictly Max 2 Trades per Instrument per Day) ===
+        should_enforce_cap = self.enforce_daily_trade_cap if enforce_daily_cap is None else enforce_daily_cap
+        if should_enforce_cap:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            with self._lock:
+                if today_str not in self._daily_trade_counts:
+                    self._daily_trade_counts[today_str] = {}
+                count = self._daily_trade_counts[today_str].get(symbol, 0)
+                if count >= self.MAX_TRADES_PER_INSTRUMENT_PER_DAY:
+                    msg = f"Order blocked: Maximum daily trade cap ({self.MAX_TRADES_PER_INSTRUMENT_PER_DAY} trades/day) reached for {symbol}."
+                    self._notify("Daily Trade Cap", msg)
+                    return {
+                        "status": "REJECTED",
+                        "reason": "DAILY_TRADE_CAP_EXCEEDED",
+                        "message": msg
+                    }
 
         normalized_side = side.strip().upper()
         normalized_mode = mode.strip().upper()
@@ -292,6 +316,12 @@ class OrderRouter:
                     "created_at": datetime.now(timezone.utc).isoformat()
                 }
                 self._open_positions[trade_id] = pos_record
+
+                # Track daily execution count
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if today_str not in self._daily_trade_counts:
+                    self._daily_trade_counts[today_str] = {}
+                self._daily_trade_counts[today_str][symbol] = self._daily_trade_counts[today_str].get(symbol, 0) + 1
 
                 return {
                     "status": "FILLED",
@@ -438,6 +468,13 @@ class OrderRouter:
                         "execution_id": execution_uuid,
                         "created_at": datetime.now(timezone.utc).isoformat()
                     }
+
+            # Track daily execution count
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            with self._lock:
+                if today_str not in self._daily_trade_counts:
+                    self._daily_trade_counts[today_str] = {}
+                self._daily_trade_counts[today_str][symbol] = self._daily_trade_counts[today_str].get(symbol, 0) + 1
 
             primary_res = execution_results[0] if execution_results else {}
             return {

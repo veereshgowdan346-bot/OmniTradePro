@@ -364,3 +364,125 @@ class ATRTrailingStop:
             return min(current_stop, candidate_stop)
 
         return current_stop
+
+
+class CrashLiquidityShort:
+    """
+    Strategy 5: Institutional Crash & Liquidity Vacuum Short.
+    Triggered during high-volatility bear expansion and market crashes.
+    Conditions:
+    1. Price breaches the rolling 24-period (or previous session) low.
+    2. Severe volume surge: Volume >= 2.5x the 20-period moving average volume.
+    3. Severe negative VWAP deviation: Price < VWAP by at least 1.5% or 1.5 * ATR.
+    Vote: -1 (Aggressive Short / PE setup), 0 (Neutral).
+    """
+    LOOKBACK_LOW = 24
+    VOLUME_SURGE_RATIO = 2.5
+    VWAP_DEVIATION_PCT = 0.015
+
+    @classmethod
+    def evaluate(cls, df: pd.DataFrame) -> Dict[str, Any]:
+        if len(df) < cls.LOOKBACK_LOW + 1:
+            return {"vote": 0, "is_crash_short": False, "description": "Insufficient candles for CrashLiquidityShort."}
+
+        cur_close = float(df["Close"].iloc[-1])
+        cur_volume = float(df["Volume"].iloc[-1]) if "Volume" in df.columns else 1000.0
+
+        # Prior lookback low
+        prior_low = float(df["Low"].iloc[-(cls.LOOKBACK_LOW + 1):-1].min())
+        avg_volume_20 = float(df["Volume"].iloc[-21:-1].mean()) if "Volume" in df.columns else 1000.0
+        volume_ratio = cur_volume / (avg_volume_20 + 1e-9)
+
+        # VWAP calculation
+        vwap_series = InstitutionalVWAP.calculate(df)
+        cur_vwap = float(vwap_series.iloc[-1]) if not vwap_series.empty else cur_close
+        vwap_dev = (cur_vwap - cur_close) / (cur_vwap + 1e-9)
+
+        # Check breach of prior low, volume surge >= 2.5x, and negative VWAP deviation
+        breached_low = cur_close < prior_low
+        surge_confirmed = volume_ratio >= cls.VOLUME_SURGE_RATIO
+        vwap_deviated = vwap_dev >= cls.VWAP_DEVIATION_PCT
+
+        if breached_low and surge_confirmed and vwap_deviated:
+            desc = (
+                f"Crash Short Confirmed: Prior Low ₹{prior_low:.2f} breached @ ₹{cur_close:.2f} "
+                f"with {volume_ratio:.1f}x volume surge & {vwap_dev*100:.1f}% VWAP negative deviation."
+            )
+            return {
+                "vote": -1,
+                "is_crash_short": True,
+                "volume_ratio": round(volume_ratio, 2),
+                "vwap_deviation_pct": round(vwap_dev * 100.0, 2),
+                "prior_low": prior_low,
+                "description": desc
+            }
+
+        return {
+            "vote": 0,
+            "is_crash_short": False,
+            "volume_ratio": round(volume_ratio, 2),
+            "vwap_deviation_pct": round(vwap_dev * 100.0, 2),
+            "prior_low": prior_low,
+            "description": "No crash liquidity short pattern."
+        }
+
+
+class VolatilityBreakoutEngine:
+    """
+    Strategy 6: Adaptive Volatility Breakout.
+    Designed for MCX Gold, Crude Oil, and Index momentum to capture multi-hour
+    directional expansion while filtering out false breakout chop.
+    Conditions:
+    - Upper Breakout: Close > 20-period High, Volume > 1.2x average, ATR expanding.
+    - Lower Breakout: Close < 20-period Low, Volume > 1.2x average, ATR expanding.
+    Vote: +1 (BUY), -1 (SELL), 0 (NEUTRAL).
+    """
+    CHANNEL_PERIOD = 20
+    VOLUME_EXPANSION_RATIO = 1.2
+
+    @classmethod
+    def evaluate(cls, df: pd.DataFrame) -> Dict[str, Any]:
+        if len(df) < cls.CHANNEL_PERIOD + 2:
+            return {"vote": 0, "breakout_type": "NONE", "description": "Insufficient candles for VolatilityBreakout."}
+
+        cur_close = float(df["Close"].iloc[-1])
+        cur_volume = float(df["Volume"].iloc[-1]) if "Volume" in df.columns else 1000.0
+
+        # Rolling 20-period Donchian Channels (strictly prior to current candle)
+        window = df.iloc[-(cls.CHANNEL_PERIOD + 1):-1]
+        channel_high = float(window["High"].max())
+        channel_low = float(window["Low"].min())
+        avg_vol = float(window["Volume"].mean()) if "Volume" in df.columns else 1000.0
+        vol_ratio = cur_volume / (avg_vol + 1e-9)
+
+        # ATR Expansion check
+        atr_cur = ATRTrailingStop.calculate_atr(df, period=14)
+        atr_prior = ATRTrailingStop.calculate_atr(df.iloc[:-5], period=14) if len(df) >= 20 else atr_cur
+        atr_expanding = atr_cur >= atr_prior
+
+        if cur_close > channel_high and vol_ratio >= cls.VOLUME_EXPANSION_RATIO and atr_expanding:
+            desc = f"Bullish Volatility Breakout: Close ₹{cur_close:.2f} > Channel High ₹{channel_high:.2f} (Vol: {vol_ratio:.1f}x)"
+            return {
+                "vote": 1,
+                "breakout_type": "BULLISH_BREAKOUT",
+                "channel_high": channel_high,
+                "channel_low": channel_low,
+                "description": desc
+            }
+        elif cur_close < channel_low and vol_ratio >= cls.VOLUME_EXPANSION_RATIO and atr_expanding:
+            desc = f"Bearish Volatility Breakout: Close ₹{cur_close:.2f} < Channel Low ₹{channel_low:.2f} (Vol: {vol_ratio:.1f}x)"
+            return {
+                "vote": -1,
+                "breakout_type": "BEARISH_BREAKOUT",
+                "channel_high": channel_high,
+                "channel_low": channel_low,
+                "description": desc
+            }
+
+        return {
+            "vote": 0,
+            "breakout_type": "NONE",
+            "channel_high": channel_high,
+            "channel_low": channel_low,
+            "description": "Inside channel. No volatility breakout."
+        }
