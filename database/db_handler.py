@@ -177,6 +177,13 @@ class DatabaseHandler:
             CREATE INDEX IF NOT EXISTS idx_audit_status ON trade_audit_log(status);
             CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON trade_audit_log(timestamp);
             """)
+
+            # Schema migration for trading_pin_enc
+            cursor.execute("PRAGMA table_info(broker_vault);")
+            cols = [col[1] for col in cursor.fetchall()]
+            if "trading_pin_enc" not in cols:
+                cursor.execute("ALTER TABLE broker_vault ADD COLUMN trading_pin_enc BLOB;")
+
             conn.commit()
             cursor.close()
 
@@ -191,7 +198,8 @@ class DatabaseHandler:
         login_mpin: str,
         totp_secret: str,
         api_key: str = "",
-        secret_key: str = ""
+        secret_key: str = "",
+        trading_pin: str = ""
     ) -> bool:
         """
         Encrypts and upserts broker credentials into broker_vault.
@@ -206,6 +214,7 @@ class DatabaseHandler:
         clean_client_id = client_id.strip()
         clean_mpin = login_mpin.strip()
         clean_totp = totp_secret.replace(" ", "").strip().upper()
+        clean_trading_pin = trading_pin.strip()
 
         if not clean_client_id:
             raise ValueError("client_id cannot be empty.")
@@ -228,6 +237,7 @@ class DatabaseHandler:
         api_key_enc = self._encrypt(api_key.strip())
         secret_key_enc = self._encrypt(secret_key.strip())
         login_mpin_enc = self._encrypt(clean_mpin)
+        trading_pin_enc = self._encrypt(clean_trading_pin)
         totp_secret_enc = self._encrypt(clean_totp)
 
         with self._lock:
@@ -236,13 +246,14 @@ class DatabaseHandler:
             cursor.execute("""
             INSERT INTO broker_vault (
                 broker_name, client_id, api_key_enc, secret_key_enc,
-                login_mpin_enc, totp_secret_enc, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                login_mpin_enc, trading_pin_enc, totp_secret_enc, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(broker_name) DO UPDATE SET
                 client_id = excluded.client_id,
                 api_key_enc = excluded.api_key_enc,
                 secret_key_enc = excluded.secret_key_enc,
                 login_mpin_enc = excluded.login_mpin_enc,
+                trading_pin_enc = excluded.trading_pin_enc,
                 totp_secret_enc = excluded.totp_secret_enc,
                 updated_at = CURRENT_TIMESTAMP
             """, (
@@ -251,6 +262,7 @@ class DatabaseHandler:
                 api_key_enc,
                 secret_key_enc,
                 login_mpin_enc,
+                trading_pin_enc,
                 totp_secret_enc
             ))
             conn.commit()
@@ -276,10 +288,16 @@ class DatabaseHandler:
             if not row:
                 raise ValueError(f"Broker '{normalized_broker}' credentials not found in vault.")
 
+            keys = row.keys() if hasattr(row, "keys") else []
+            trading_pin_val = ""
+            if "trading_pin_enc" in keys:
+                trading_pin_val = self._decrypt(row["trading_pin_enc"])
+
             return {
                 "broker_name": row["broker_name"],
                 "client_id": row["client_id"],
                 "login_mpin": self._decrypt(row["login_mpin_enc"]),
+                "trading_pin": trading_pin_val,
                 "totp_secret": self._decrypt(row["totp_secret_enc"]),
                 "api_key": self._decrypt(row["api_key_enc"]),
                 "secret_key": self._decrypt(row["secret_key_enc"]),

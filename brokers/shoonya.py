@@ -66,6 +66,7 @@ class ShoonyaBroker(BaseBroker):
         # Credentials & Tokens
         self._user_id = ""
         self._password = ""
+        self._trading_pin = ""
         self._api_key = ""
         self._vendor_code = ""
         self._imei = ""
@@ -96,7 +97,8 @@ class ShoonyaBroker(BaseBroker):
         api_key: Optional[str] = None,
         vendor_code: Optional[str] = None,
         imei: Optional[str] = None,
-        totp_secret: Optional[str] = None
+        totp_secret: Optional[str] = None,
+        trading_pin: Optional[str] = None
     ) -> bool:
         """
         Executes automatic end-to-end Shoonya Noren authentication:
@@ -116,6 +118,7 @@ class ShoonyaBroker(BaseBroker):
                     creds = self._load_credentials()
                     self._user_id = creds.get("client_id", "")
                     self._password = creds.get("login_mpin", "")
+                    self._trading_pin = creds.get("trading_pin", "")
                     self._api_key = creds.get("api_key", "")
                     self._vendor_code = creds.get("vendor_code") or creds.get("secret_key") or f"{self._user_id}_U"
                     self._imei = creds.get("imei") or self._generate_default_imei(self._user_id)
@@ -123,6 +126,7 @@ class ShoonyaBroker(BaseBroker):
                 else:
                     self._user_id = user_id
                     self._password = password or ""
+                    self._trading_pin = trading_pin or ""
                     self._api_key = api_key or ""
                     self._vendor_code = vendor_code or f"{self._user_id}_U"
                     self._imei = imei or self._generate_default_imei(self._user_id)

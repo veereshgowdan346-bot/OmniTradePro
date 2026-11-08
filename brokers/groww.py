@@ -62,6 +62,7 @@ class GrowwBroker(BaseBroker):
         # Credentials & Tokens
         self._client_id = ""
         self._password = ""
+        self._trading_pin = ""
         self._api_key = ""
         self._totp_secret = ""
         self._bearer_token = ""
@@ -88,7 +89,8 @@ class GrowwBroker(BaseBroker):
         client_id: Optional[str] = None,
         password: Optional[str] = None,
         api_key: Optional[str] = None,
-        totp_secret: Optional[str] = None
+        totp_secret: Optional[str] = None,
+        trading_pin: Optional[str] = None
     ) -> bool:
         """
         Executes automatic end-to-end Groww authentication:
@@ -107,11 +109,13 @@ class GrowwBroker(BaseBroker):
                     creds = self._load_credentials()
                     self._client_id = creds.get("client_id", "")
                     self._password = creds.get("login_mpin", "")
+                    self._trading_pin = creds.get("trading_pin", "")
                     self._api_key = creds.get("api_key", "")
                     self._totp_secret = creds.get("totp_secret", "")
                 else:
                     self._client_id = client_id
                     self._password = password or ""
+                    self._trading_pin = trading_pin or ""
                     self._api_key = api_key or ""
                     self._totp_secret = totp_secret or ""
 

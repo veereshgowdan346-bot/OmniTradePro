@@ -79,6 +79,18 @@ def run_tests() -> bool:
     except Exception:
         pass
 
+    # Ensure clean database test audit state for Zero-Fake-Data verification
+    try:
+        from database.db_handler import DatabaseHandler
+        db_clean = DatabaseHandler()
+        with db_clean._lock:
+            conn = db_clean._get_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM trade_audit_log;")
+            conn.commit()
+    except Exception:
+        pass
+
     try:
         # =====================================================================
         # 1. Stylesheet Compilation & Token Syntax Test
