@@ -37,12 +37,18 @@ except ImportError:
     class QWidget:
         def __init__(self, parent=None): pass
         def setStyleSheet(self, s): pass
-    class QFrame(QWidget): pass
+        def setFixedSize(self, w, h): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+    class QFrame(QWidget):
+        NoFrame = 0
+        def setFrameShape(self, s): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
-        def addWidget(self, w): pass
-        def addLayout(self, l): pass
+        def addWidget(self, w, *args): pass
+        def addLayout(self, l, *args): pass
         def addStretch(self, *args): pass
+        def addSpacing(self, *args): pass
         def setContentsMargins(self, *args): pass
         def setSpacing(self, s): pass
     class QHBoxLayout(QVBoxLayout): pass
@@ -51,10 +57,19 @@ except ImportError:
         def setWidgetResizable(self, b): pass
         def setWidget(self, w): pass
         def setFrameShape(self, s): pass
+        def setStyleSheet(self, s): pass
     class QStackedWidget:
-        def __init__(self, parent=None): pass
-        def addWidget(self, w): pass
-        def setCurrentIndex(self, i): pass
+        def __init__(self, parent=None):
+            self._widgets = []
+            self._current_index = 0
+        def addWidget(self, w, *args):
+            self._widgets.append(w)
+        def setCurrentIndex(self, i):
+            self._current_index = i
+        def currentIndex(self):
+            return self._current_index
+        def count(self):
+            return len(self._widgets)
     class QMessageBox:
         @staticmethod
         def warning(p, t, m): pass

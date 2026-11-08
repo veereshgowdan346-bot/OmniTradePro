@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-OmniTradePro - Multi-Broker Vault & 2FA Configuration Dialog
+OmniTradePro - Multi-Broker Vault & 2FA Configuration Widget & Dialog
 Platform: Windows 10/11 64-bit | Python 3.10+
 Provides an institutional frosted glassmorphism interface to manage AES-256
 encrypted credentials for Angel One, Shoonya, and Groww with live 2FA verification.
 Features:
+- Broker selector tabs (Angel One, Shoonya, Groww) with active pill styling
 - Dedicated 6-digit Trading PIN / TPIN input with show/hide password toggle
-- Real-time live TOTP engine rotating every 30 seconds with 1-second countdown
-- Direct live backend authentication testing with inline status banner
-- Full AES-256 Fernet field-level encryption
+- Real-time live rolling TOTP engine rotating every 30s with large monospace digits [ 4 8 2 9 1 0 ]
+  and synchronized 30-second countdown bar
+- Direct asynchronous live backend authentication testing [ ⚡ Test Live Auth ] with inline status banner
+- Full AES-256 Fernet field-level encryption writing to database/omnitrade_vault.db
 """
 
 import time
@@ -40,6 +42,7 @@ except ImportError:
         def setLayout(self, l): pass
         def setStyleSheet(self, s): pass
         def setProperty(self, k, v): pass
+        def setVisible(self, v): pass
         def exec(self): return 1
         def accept(self): pass
         def reject(self): pass
@@ -47,6 +50,7 @@ except ImportError:
         def __init__(self, parent=None): pass
         def setStyleSheet(self, s): pass
         def setProperty(self, k, v): pass
+        def setVisible(self, v): pass
         def setLayout(self, l): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
@@ -55,10 +59,15 @@ except ImportError:
         def addStretch(self, *args): pass
         def setContentsMargins(self, *args): pass
         def setSpacing(self, s): pass
+        def addSpacing(self, *args): pass
     class QHBoxLayout(QVBoxLayout): pass
+    class _TextStr(str):
+        def __call__(self):
+            return str(self)
+
     class QLabel:
-        def __init__(self, text="", parent=None): self.text = text
-        def setText(self, t): self.text = t
+        def __init__(self, text="", parent=None): self.text = _TextStr(text)
+        def setText(self, t): self.text = _TextStr(t)
         def setStyleSheet(self, s): pass
         def setAlignment(self, a): pass
         def setProperty(self, k, v): pass
@@ -76,6 +85,7 @@ except ImportError:
         def setText(self, t): self._text = t
         def setStyleSheet(self, s): pass
         def setProperty(self, k, v): pass
+        def setVisible(self, v): pass
         def textChanged(self): pass
     class QPushButton:
         def __init__(self, text="", parent=None): self.text = text
@@ -83,6 +93,8 @@ except ImportError:
         def setProperty(self, k, v): pass
         def setStyleSheet(self, s): pass
         def setEnabled(self, e): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
         def clicked(self): pass
     class QComboBox:
         def __init__(self, parent=None): self._items = []
@@ -92,6 +104,7 @@ except ImportError:
         def currentTextChanged(self): pass
         def setStyleSheet(self, s): pass
         def setProperty(self, k, v): pass
+        def setVisible(self, v): pass
     class QFrame:
         def __init__(self, parent=None): pass
         def setFrameShape(self, s): pass
@@ -108,6 +121,7 @@ except ImportError:
         def setValue(self, v): pass
         def setStyleSheet(self, s): pass
         def setTextVisible(self, v): pass
+        def setFixedHeight(self, h): pass
     class QScrollArea:
         def __init__(self, parent=None): pass
         def setWidgetResizable(self, r): pass
@@ -134,24 +148,17 @@ except ImportError:
         AlignVCenter = 0x0080
 
 
-class BrokerVaultDialog(QDialog):
+class BrokerVaultWidget(QWidget):
     """
-    Modal dialog allowing users to securely input, encrypt, test, and activate
-    credentials across institutional broker gateways.
-    Upgraded with:
-    1. 6-digit Trading PIN / TPIN input with show/hide password toggle.
-    2. Real-time dynamic TOTP engine rotating every 30 seconds with 1-second countdown badge.
-    3. Live backend authentication handshake testing with inline response banner.
+    Unified institutional frosted glassmorphism credentials & 2FA management widget.
+    Embedded in both the Sidebar Settings Page and the BrokerVaultDialog popup.
     """
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("OmniTradePro — Multi-Broker Security Vault & Dynamic 2FA")
-        self.resize(620, 740)
-        self.setMinimumSize(580, 680)
-
         self.db = DatabaseHandler()
         self.vault = VaultManager()
+        self._current_broker: str = "ANGEL_ONE"
 
         self._init_ui()
         self._init_totp_timer()
@@ -159,14 +166,13 @@ class BrokerVaultDialog(QDialog):
 
     def _init_ui(self) -> None:
         self.setStyleSheet("""
-            QDialog {
-                background-color: #070d18;
-                border: 1px solid #142236;
+            QWidget {
+                color: #94a3b8;
+                font-family: 'Segoe UI', Inter, -apple-system, sans-serif;
             }
             QLabel {
                 color: #94a3b8;
                 font-size: 12px;
-                font-family: 'Segoe UI', Inter, sans-serif;
             }
             QLineEdit {
                 background-color: #0b1424;
@@ -206,9 +212,9 @@ class BrokerVaultDialog(QDialog):
             }
         """)
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(22, 18, 22, 18)
-        main_layout.setSpacing(12)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
         # 1. Header Banner
         header_box = QVBoxLayout()
@@ -219,28 +225,39 @@ class BrokerVaultDialog(QDialog):
         subtitle_label.setStyleSheet("font-size: 11px; color: #64748b;")
         header_box.addWidget(title_label)
         header_box.addWidget(subtitle_label)
-        main_layout.addLayout(header_box)
+        layout.addLayout(header_box)
 
-        # 2. Broker Target Selector
-        sel_layout = QHBoxLayout()
-        sel_label = QLabel("Target Gateway:", self)
-        sel_label.setStyleSheet("font-weight: 600; color: #f0f4f8; font-size: 13px;")
-        self.broker_combo = QComboBox(self)
-        self.broker_combo.addItems(["ANGEL_ONE", "SHOONYA", "GROWW"])
+        # 2. Broker Selector Tabs (Active Pills)
+        tabs_box = QHBoxLayout()
+        tabs_box.setSpacing(8)
+
+        self.btn_tab_angel = QPushButton("Angel One (SmartAPI)", self)
+        self.btn_tab_shoonya = QPushButton("Shoonya (NorenAPI)", self)
+        self.btn_tab_groww = QPushButton("Groww Gateway", self)
+
+        for btn in (self.btn_tab_angel, self.btn_tab_shoonya, self.btn_tab_groww):
+            btn.setFixedHeight(34)
+            tabs_box.addWidget(btn)
+
         try:
-            self.broker_combo.currentTextChanged.connect(self._on_broker_changed)
+            self.btn_tab_angel.clicked.connect(lambda: self._select_broker("ANGEL_ONE"))
+            self.btn_tab_shoonya.clicked.connect(lambda: self._select_broker("SHOONYA"))
+            self.btn_tab_groww.clicked.connect(lambda: self._select_broker("GROWW"))
         except Exception:
             pass
 
-        sel_layout.addWidget(sel_label)
-        sel_layout.addWidget(self.broker_combo)
-        sel_layout.addStretch()
+        tabs_box.addStretch()
 
         # Gateway Active Status Badge
         self.status_badge = QLabel("Gateway Status: Inactive", self)
         self.status_badge.setStyleSheet("font-weight: 700; color: #ffab00; font-size: 12px;")
-        sel_layout.addWidget(self.status_badge)
-        main_layout.addLayout(sel_layout)
+        tabs_box.addWidget(self.status_badge)
+        layout.addLayout(tabs_box)
+
+        # Compatibility broker combo (hidden or synchronized)
+        self.broker_combo = QComboBox(self)
+        self.broker_combo.addItems(["ANGEL_ONE", "SHOONYA", "GROWW"])
+        self.broker_combo.setVisible(False)
 
         # 3. Main Input Card Panel
         form_frame = QFrame(self)
@@ -269,12 +286,15 @@ class BrokerVaultDialog(QDialog):
         self.mpin_edit.setPlaceholderText("Enter 4-digit numeric MPIN")
         self.btn_toggle_mpin = QPushButton("👁 Show", self)
         self.btn_toggle_mpin.setFixedWidth(70)
-        self.btn_toggle_mpin.clicked.connect(lambda: self._toggle_echo(self.mpin_edit, self.btn_toggle_mpin))
+        try:
+            self.btn_toggle_mpin.clicked.connect(lambda: self._toggle_echo(self.mpin_edit, self.btn_toggle_mpin))
+        except Exception:
+            pass
         mpin_box.addWidget(self.mpin_edit)
         mpin_box.addWidget(self.btn_toggle_mpin)
         form_layout.addLayout(mpin_box)
 
-        # Row C: 6-Digit Trading PIN / TPIN (CRITICAL REQUIREMENT 1)
+        # Row C: 6-Digit Trading PIN / TPIN
         form_layout.addWidget(QLabel("Trading PIN / TPIN (6-Digit Authorization PIN):", self))
         tpin_box = QHBoxLayout()
         self.trading_pin_edit = QLineEdit(self)
@@ -282,7 +302,10 @@ class BrokerVaultDialog(QDialog):
         self.trading_pin_edit.setPlaceholderText("Enter 6-digit numeric Trading PIN (TPIN)")
         self.btn_toggle_tpin = QPushButton("👁 Show", self)
         self.btn_toggle_tpin.setFixedWidth(70)
-        self.btn_toggle_tpin.clicked.connect(lambda: self._toggle_echo(self.trading_pin_edit, self.btn_toggle_tpin))
+        try:
+            self.btn_toggle_tpin.clicked.connect(lambda: self._toggle_echo(self.trading_pin_edit, self.btn_toggle_tpin))
+        except Exception:
+            pass
         tpin_box.addWidget(self.trading_pin_edit)
         tpin_box.addWidget(self.btn_toggle_tpin)
         form_layout.addLayout(tpin_box)
@@ -299,12 +322,15 @@ class BrokerVaultDialog(QDialog):
             pass
         self.btn_toggle_totp = QPushButton("👁 Show", self)
         self.btn_toggle_totp.setFixedWidth(70)
-        self.btn_toggle_totp.clicked.connect(lambda: self._toggle_echo(self.totp_edit, self.btn_toggle_totp))
+        try:
+            self.btn_toggle_totp.clicked.connect(lambda: self._toggle_echo(self.totp_edit, self.btn_toggle_totp))
+        except Exception:
+            pass
         totp_box.addWidget(self.totp_edit)
         totp_box.addWidget(self.btn_toggle_totp)
         form_layout.addLayout(totp_box)
 
-        # Row E: Real-time Live TOTP Box (CRITICAL REQUIREMENT 2)
+        # Row E: Real-Time Live Rolling TOTP Badge
         live_totp_frame = QFrame(self)
         live_totp_frame.setStyleSheet("""
             QFrame {
@@ -360,7 +386,6 @@ class BrokerVaultDialog(QDialog):
             }
         """)
         live_totp_layout.addWidget(self.totp_progress)
-
         form_layout.addWidget(live_totp_frame)
 
         # Row F: API Key
@@ -376,9 +401,9 @@ class BrokerVaultDialog(QDialog):
         self.secret_key_edit.setPlaceholderText("Enter Secret Key / Vendor Code if provided")
         form_layout.addWidget(self.secret_key_edit)
 
-        main_layout.addWidget(form_frame)
+        layout.addWidget(form_frame)
 
-        # 4. Live Authentication Status Banner (CRITICAL REQUIREMENT 3)
+        # 4. Live Authentication Status Banner
         self.auth_status_banner = QLabel("", self)
         self.auth_status_banner.setStyleSheet("""
             background-color: #0b1424;
@@ -391,13 +416,12 @@ class BrokerVaultDialog(QDialog):
         """)
         self.auth_status_banner.setAlignment(Qt.AlignCenter)
         self.auth_status_banner.setText("Ready: Test broker authentication handshake or save credentials.")
-        main_layout.addWidget(self.auth_status_banner)
+        layout.addWidget(self.auth_status_banner)
 
-        # 5. Action Buttons (Includes Test Live Authentication)
+        # 5. Action Buttons (Test Live Auth, Save & Encrypt, Set Active)
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        # [⚡ Test Connection & Authenticate] (CRITICAL REQUIREMENT 3)
         self.btn_test_auth = QPushButton("⚡ Test Live Auth", self)
         self.btn_test_auth.setStyleSheet("""
             QPushButton {
@@ -409,7 +433,6 @@ class BrokerVaultDialog(QDialog):
             }
             QPushButton:hover {
                 background-color: #d97706;
-                box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
             }
         """)
         try:
@@ -417,7 +440,7 @@ class BrokerVaultDialog(QDialog):
         except Exception:
             pass
 
-        self.btn_save = QPushButton("Save & Encrypt", self)
+        self.btn_save = QPushButton("Save & Encrypt (AES-256)", self)
         self.btn_save.setStyleSheet("""
             QPushButton {
                 background-color: #065f46;
@@ -428,7 +451,6 @@ class BrokerVaultDialog(QDialog):
             }
             QPushButton:hover {
                 background-color: #059669;
-                box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
             }
         """)
         try:
@@ -454,24 +476,58 @@ class BrokerVaultDialog(QDialog):
         except Exception:
             pass
 
-        self.btn_close = QPushButton("Close", self)
-        try:
-            self.btn_close.clicked.connect(self.accept)
-        except Exception:
-            pass
-
         btn_layout.addWidget(self.btn_test_auth)
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_set_active)
-        btn_layout.addWidget(self.btn_close)
-        main_layout.addLayout(btn_layout)
+        layout.addLayout(btn_layout)
+
+        # Update tab visual state
+        self._update_tab_styles()
+
+    def _select_broker(self, broker_name: str) -> None:
+        """Switches active broker tab."""
+        self._current_broker = broker_name.strip().upper()
+        self.broker_combo.setCurrentText(self._current_broker)
+        self._update_tab_styles()
+        self._load_selected_broker_credentials()
+        self._update_realtime_totp()
+
+    def _update_tab_styles(self) -> None:
+        """Applies active neon glow styling to selected broker tab."""
+        active_style = """
+            QPushButton {
+                background-color: rgba(0, 229, 255, 0.15);
+                border: 1px solid #00f0ff;
+                border-radius: 6px;
+                color: #00f0ff;
+                font-weight: bold;
+                padding: 6px 14px;
+            }
+        """
+        inactive_style = """
+            QPushButton {
+                background-color: #0b1424;
+                border: 1px solid #1e3a5f;
+                border-radius: 6px;
+                color: #94a3b8;
+                font-weight: 600;
+                padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background-color: #162a45;
+                color: #f8fafc;
+            }
+        """
+        self.btn_tab_angel.setStyleSheet(active_style if self._current_broker == "ANGEL_ONE" else inactive_style)
+        self.btn_tab_shoonya.setStyleSheet(active_style if self._current_broker == "SHOONYA" else inactive_style)
+        self.btn_tab_groww.setStyleSheet(active_style if self._current_broker == "GROWW" else inactive_style)
 
     # =========================================================================
     # Live Real-Time TOTP Timer Engine (1-Second Ticking & 30-Second Rotation)
     # =========================================================================
 
     def _init_totp_timer(self) -> None:
-        """Initializes 1-second interval timer for live TOTP calculation and expiration countdown."""
+        """Initializes 1-second interval timer for live TOTP calculation and countdown."""
         try:
             self.totp_timer = QTimer(self)
             self.totp_timer.timeout.connect(self._update_realtime_totp)
@@ -508,7 +564,7 @@ class BrokerVaultDialog(QDialog):
             # Calculate seconds remaining in current 30s cycle
             rem_seconds = 30 - (int(time.time()) % 30)
 
-            # Format code as [ 1 2 3 4 5 6 ]
+            # Format code as [ 4 8 2 9 1 0 ]
             spaced_code = " ".join(list(token))
             self.lbl_live_totp_code.setText(f"[ {spaced_code} ]")
             self.lbl_live_totp_code.setStyleSheet("""
@@ -531,19 +587,15 @@ class BrokerVaultDialog(QDialog):
             except Exception:
                 pass
 
-        except Exception as exc:
+        except Exception:
             self.lbl_live_totp_code.setText("[ INVALID KEY ]")
             self.lbl_live_totp_code.setStyleSheet("color: #ef4444; font-size: 18px; font-weight: bold;")
             self.lbl_totp_timer.setText("Invalid Base32 Secret")
             self.lbl_totp_timer.setStyleSheet("color: #ef4444; font-size: 11px;")
 
     def _on_totp_secret_changed(self) -> None:
-        """Immediately triggers TOTP calculation when user edits or pastes the secret."""
+        """Immediately recalculates TOTP when secret is edited or pasted."""
         self._update_realtime_totp()
-
-    # =========================================================================
-    # Show / Hide Password Masking Toggles
-    # =========================================================================
 
     def _toggle_echo(self, line_edit: QLineEdit, button: QPushButton) -> None:
         """Toggles between masked Password and visible Normal text."""
@@ -561,16 +613,10 @@ class BrokerVaultDialog(QDialog):
     # Data Loading & Persistence
     # =========================================================================
 
-    def _on_broker_changed(self, broker_name: str) -> None:
-        """Reloads credentials when target gateway changes."""
-        self._load_selected_broker_credentials()
-        self._update_realtime_totp()
-
     def _load_selected_broker_credentials(self) -> None:
         """Pulls decrypted credentials from vault and populates all form fields."""
-        broker = self.broker_combo.currentText().strip().upper()
+        broker = self._current_broker
         try:
-            # Check VaultManager first, then fallback to DatabaseHandler
             creds = None
             try:
                 creds = self.vault.get_broker_credentials(broker)
@@ -592,7 +638,7 @@ class BrokerVaultDialog(QDialog):
                 self.status_badge.setText("Gateway: Standby")
                 self.status_badge.setStyleSheet("font-weight: 700; color: #94a3b8; font-size: 12px;")
 
-            self.auth_status_banner.setText("Vault Loaded: Saved credentials decrypted successfully.")
+            self.auth_status_banner.setText(f"Vault Loaded: {broker} credentials decrypted successfully.")
             self.auth_status_banner.setStyleSheet("""
                 background-color: #0b1424;
                 border: 1px solid #142236;
@@ -603,7 +649,6 @@ class BrokerVaultDialog(QDialog):
                 padding: 8px 12px;
             """)
         except Exception:
-            # Clear fields if not yet configured
             self.client_id_edit.setText("")
             self.mpin_edit.setText("")
             self.trading_pin_edit.setText("")
@@ -626,8 +671,8 @@ class BrokerVaultDialog(QDialog):
         self._update_realtime_totp()
 
     def _save_credentials(self) -> None:
-        """Encrypts credentials (including 6-digit Trading PIN) with AES-256 and saves to vault."""
-        broker = self.broker_combo.currentText().strip().upper()
+        """Encrypts credentials with AES-256 and saves to database/omnitrade_vault.db."""
+        broker = self._current_broker
         client_id = self.client_id_edit.text().strip()
         mpin = self.mpin_edit.text().strip()
         trading_pin = self.trading_pin_edit.text().strip()
@@ -639,7 +684,6 @@ class BrokerVaultDialog(QDialog):
             QMessageBox.warning(self, "Validation Error", "Client ID, MPIN, and TOTP Secret are mandatory.")
             return
 
-        # 6-Digit Trading PIN validation (if entered, enforce numeric 6 digits)
         if trading_pin and (not trading_pin.isdigit() or len(trading_pin) != 6):
             QMessageBox.warning(
                 self,
@@ -649,7 +693,7 @@ class BrokerVaultDialog(QDialog):
             return
 
         try:
-            # Save to VaultManager (omnitrade_vault.db)
+            # 1. Save to VaultManager (omnitrade_vault.db)
             self.vault.save_broker_credentials(
                 broker_name=broker,
                 client_id=client_id,
@@ -660,7 +704,7 @@ class BrokerVaultDialog(QDialog):
                 secret_key=secret_key,
                 vendor_code=secret_key
             )
-            # Synchronize with DatabaseHandler (omnitrade.db)
+            # 2. Synchronize with DatabaseHandler
             self.db.save_broker_credentials(
                 broker_name=broker,
                 client_id=client_id,
@@ -693,7 +737,7 @@ class BrokerVaultDialog(QDialog):
 
     def _set_active_gateway(self) -> None:
         """Marks the selected broker as the primary active gateway."""
-        broker = self.broker_combo.currentText().strip().upper()
+        broker = self._current_broker
         success = self.vault.set_active_broker(broker) or self.db.set_active_broker(broker)
         if success:
             QMessageBox.information(self, "Active Gateway Updated", f"{broker} is now set as the primary market gateway.")
@@ -702,7 +746,7 @@ class BrokerVaultDialog(QDialog):
             QMessageBox.warning(self, "Action Failed", f"Could not activate {broker}. Ensure credentials are saved first.")
 
     # =========================================================================
-    # Live Asynchronous Backend Authentication Testing (CRITICAL REQUIREMENT 3)
+    # Live Asynchronous Backend Authentication Testing
     # =========================================================================
 
     def _test_live_authentication(self) -> None:
@@ -710,7 +754,7 @@ class BrokerVaultDialog(QDialog):
         Dispatches asynchronous test handshake to broker API servers with live auto-generated TOTP.
         Displays immediate inline feedback (GREEN banner on success, RED banner on failure).
         """
-        broker = self.broker_combo.currentText().strip().upper()
+        broker = self._current_broker
         client_id = self.client_id_edit.text().strip()
         mpin = self.mpin_edit.text().strip()
         trading_pin = self.trading_pin_edit.text().strip()
@@ -731,7 +775,6 @@ class BrokerVaultDialog(QDialog):
             """)
             return
 
-        # Update banner to testing state
         self.auth_status_banner.setText(f"⏳ Connecting to {broker} gateway with live TOTP...")
         self.auth_status_banner.setStyleSheet("""
             background-color: #78350f;
@@ -823,3 +866,58 @@ class BrokerVaultDialog(QDialog):
                 """)
         except Exception:
             pass
+
+
+class BrokerVaultDialog(QDialog):
+    """
+    Modal dialog wrapper around BrokerVaultWidget.
+    Provides identical upgraded credentials and dynamic 2FA controls in a popup window.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("OmniTradePro — Multi-Broker Security Vault & Dynamic 2FA")
+        self.resize(640, 780)
+        self.setMinimumSize(580, 680)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #070d18;
+                border: 1px solid #142236;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        self.vault_widget = BrokerVaultWidget(self)
+        layout.addWidget(self.vault_widget)
+
+        # Close button at dialog bottom
+        bottom_box = QHBoxLayout()
+        bottom_box.addStretch()
+        self.btn_close = QPushButton("Close", self)
+        self.btn_close.setFixedWidth(100)
+        try:
+            self.btn_close.clicked.connect(self.accept)
+        except Exception:
+            pass
+        bottom_box.addWidget(self.btn_close)
+        layout.addLayout(bottom_box)
+
+        # Mirror references for complete backwards compatibility
+        self.db = self.vault_widget.db
+        self.vault = self.vault_widget.vault
+        self.client_id_edit = self.vault_widget.client_id_edit
+        self.mpin_edit = self.vault_widget.mpin_edit
+        self.trading_pin_edit = self.vault_widget.trading_pin_edit
+        self.totp_edit = self.vault_widget.totp_edit
+        self.api_key_edit = self.vault_widget.api_key_edit
+        self.secret_key_edit = self.vault_widget.secret_key_edit
+        self.broker_combo = self.vault_widget.broker_combo
+        self.lbl_live_totp_code = self.vault_widget.lbl_live_totp_code
+        self.auth_status_banner = self.vault_widget.auth_status_banner
+        self.btn_test_auth = self.vault_widget.btn_test_auth
+        self.btn_save = self.vault_widget.btn_save
+        self.btn_set_active = self.vault_widget.btn_set_active

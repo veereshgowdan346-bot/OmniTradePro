@@ -29,7 +29,8 @@ from brokers.base_broker import (
     OrderType,
     ProductType,
     Exchange,
-    AccountFunds
+    AccountFunds,
+    SanitizedLogger
 )
 from database.vault_manager import VaultManager
 from database.db_handler import DatabaseHandler
@@ -62,6 +63,7 @@ class ShoonyaBroker(BaseBroker):
         super().__init__(broker_name="SHOONYA")
         self.vault = vault_manager or VaultManager()
         self.db = db_handler or DatabaseHandler()
+        self.logger = SanitizedLogger("ShoonyaBroker")
 
         # Credentials & Tokens
         self._user_id = ""
@@ -176,6 +178,7 @@ class ShoonyaBroker(BaseBroker):
                         self._connection_error = None
                         self._last_auth_timestamp = time.time()
                         self._session_expiry_timestamp = self._last_auth_timestamp + self.SESSION_VALIDITY_SECONDS
+                        self.logger.info(f"Shoonya session authenticated for user {self._user_id}. Susertoken acquired [REDACTED].")
 
                         # Start background non-blocking token refresh worker
                         self._start_auto_refresh_worker()
@@ -185,6 +188,7 @@ class ShoonyaBroker(BaseBroker):
                         self.is_authenticated = False
                         self._connection_state = "ERROR"
                         self._connection_error = emsg
+                        self.logger.error(f"Shoonya authentication rejected: {emsg}")
                         return False
 
             except urllib.error.HTTPError as err:
@@ -195,6 +199,7 @@ class ShoonyaBroker(BaseBroker):
                     self._connection_error = f"HTTP {err.code}"
                 self.is_authenticated = False
                 self._connection_state = "ERROR"
+                self.logger.error(f"Shoonya HTTP authentication error: {self._connection_error}")
                 return False
             except Exception as exc:
                 self.is_authenticated = False

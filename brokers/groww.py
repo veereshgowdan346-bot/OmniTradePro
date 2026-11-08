@@ -28,7 +28,8 @@ from brokers.base_broker import (
     OrderType,
     ProductType,
     Exchange,
-    AccountFunds
+    AccountFunds,
+    SanitizedLogger
 )
 from database.vault_manager import VaultManager
 from database.db_handler import DatabaseHandler
@@ -58,6 +59,7 @@ class GrowwBroker(BaseBroker):
         super().__init__(broker_name="GROWW")
         self.vault = vault_manager or VaultManager()
         self.db = db_handler or DatabaseHandler()
+        self.logger = SanitizedLogger("GrowwBroker")
 
         # Credentials & Tokens
         self._client_id = ""
@@ -156,6 +158,7 @@ class GrowwBroker(BaseBroker):
                         self._connection_error = None
                         self._last_auth_timestamp = time.time()
                         self._session_expiry_timestamp = self._last_auth_timestamp + self.SESSION_VALIDITY_SECONDS
+                        self.logger.info(f"Groww session authenticated for client {self._client_id}. Bearer token acquired [REDACTED].")
 
                         # Start background non-blocking token refresh worker
                         self._start_auto_refresh_worker()
@@ -165,6 +168,7 @@ class GrowwBroker(BaseBroker):
                         self.is_authenticated = False
                         self._connection_state = "ERROR"
                         self._connection_error = emsg
+                        self.logger.error(f"Groww authentication rejected: {emsg}")
                         return False
 
             except urllib.error.HTTPError as err:
@@ -175,11 +179,13 @@ class GrowwBroker(BaseBroker):
                     self._connection_error = f"HTTP {err.code}: {err.reason}"
                 self.is_authenticated = False
                 self._connection_state = "ERROR"
+                self.logger.error(f"Groww HTTP authentication error: {self._connection_error}")
                 return False
             except Exception as exc:
                 self.is_authenticated = False
                 self._connection_state = "ERROR"
                 self._connection_error = str(exc)
+                self.logger.error(f"Groww authentication exception: {str(exc)}")
                 return False
 
     def disconnect(self) -> bool:

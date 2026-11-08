@@ -28,7 +28,8 @@ from brokers.base_broker import (
     OrderType,
     ProductType,
     Exchange,
-    AccountFunds
+    AccountFunds,
+    SanitizedLogger
 )
 from database.vault_manager import VaultManager
 from database.db_handler import DatabaseHandler
@@ -58,6 +59,7 @@ class AngelOneBroker(BaseBroker):
         super().__init__(broker_name="ANGEL_ONE")
         self.vault = vault_manager or VaultManager()
         self.db = db_handler or DatabaseHandler()
+        self.logger = SanitizedLogger("AngelOneBroker")
 
         # Credentials & Tokens
         self._client_id = ""
@@ -142,6 +144,7 @@ class AngelOneBroker(BaseBroker):
                     self._connection_error = None
                     self._last_auth_timestamp = time.time()
                     self._jwt_expiry_timestamp = self._last_auth_timestamp + self.DEFAULT_JWT_VALIDITY
+                    self.logger.info(f"Angel One session authenticated for client {self._client_id}. JWT acquired [REDACTED].")
 
                     # Start background non-blocking token refresh worker
                     self._start_auto_refresh_worker()
@@ -151,12 +154,14 @@ class AngelOneBroker(BaseBroker):
                     self._connection_state = "ERROR"
                     if not self._connection_error:
                         self._connection_error = "Authentication failed on both SmartConnect and REST gateways"
+                    self.logger.error(f"Angel One authentication rejected: {self._connection_error}")
                     return False
 
             except Exception as exc:
                 self.is_authenticated = False
                 self._connection_state = "ERROR"
                 self._connection_error = str(exc)
+                self.logger.error(f"Angel One authentication exception: {str(exc)}")
                 return False
 
     def disconnect(self) -> bool:

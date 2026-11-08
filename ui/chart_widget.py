@@ -23,6 +23,11 @@ except ImportError:
     class QWidget:
         def __init__(self, parent=None): pass
         def setStyleSheet(self, s): pass
+        def setProperty(self, k, v): pass
+        def setMinimumHeight(self, h): pass
+        def setMouseTracking(self, b): pass
+        def update(self): pass
+        def setLayout(self, l): pass
     class QFrame(QWidget): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
@@ -30,8 +35,10 @@ except ImportError:
         def addLayout(self, l): pass
         def setContentsMargins(self, *args): pass
         def setSpacing(self, s): pass
+        def addSpacing(self, s): pass
     class QHBoxLayout(QVBoxLayout):
         def addStretch(self, *args): pass
+        def addSpacing(self, s): pass
     class QLabel:
         def __init__(self, text="", parent=None): self.text = text
         def setText(self, t): self.text = t
@@ -40,6 +47,8 @@ except ImportError:
         def __init__(self, parent=None): pass
         def addItems(self, items): pass
         def currentText(self): return "NIFTY 50"
+        def setStyleSheet(self, s): pass
+        def setProperty(self, k, v): pass
     class QPushButton:
         def __init__(self, text="", parent=None): self.text = text
         def setStyleSheet(self, s): pass

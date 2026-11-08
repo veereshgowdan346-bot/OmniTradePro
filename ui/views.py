@@ -31,12 +31,19 @@ except ImportError:
     class QWidget:
         def __init__(self, parent=None): pass
         def setStyleSheet(self, s): pass
-    class QFrame(QWidget): pass
+        def setFixedSize(self, w, h): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setProperty(self, k, v): pass
+    class QFrame(QWidget):
+        NoFrame = 0
+        def setFrameShape(self, s): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
-        def addWidget(self, w): pass
-        def addLayout(self, l): pass
+        def addWidget(self, w, *args): pass
+        def addLayout(self, l, *args): pass
         def addStretch(self, *args): pass
+        def addSpacing(self, *args): pass
         def setContentsMargins(self, *args): pass
         def setSpacing(self, s): pass
     class QHBoxLayout(QVBoxLayout): pass
@@ -49,6 +56,9 @@ except ImportError:
     class QPushButton:
         def __init__(self, text="", parent=None): self.text = text
         def setStyleSheet(self, s): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setEnabled(self, e): pass
         def clicked(self): pass
     class QComboBox:
         def __init__(self, parent=None): pass
@@ -85,10 +95,12 @@ except ImportError:
         def setWidgetResizable(self, b): pass
         def setWidget(self, w): pass
         def setFrameShape(self, s): pass
+        def setStyleSheet(self, s): pass
     class QCheckBox:
         def __init__(self, text="", parent=None): pass
         def setChecked(self, b): pass
         def isChecked(self): return True
+        def setStyleSheet(self, s): pass
     class QMessageBox:
         @staticmethod
         def information(p, t, m): pass
@@ -625,88 +637,7 @@ class ReportsView(BasePageView):
             self.table.setItem(r, 8, QTableWidgetItem(f"₹{float(t.get('net_pnl', 0.0)):,.2f}"))
 
 
-class SettingsView(BasePageView):
-    """Page 11: Embedded Broker Vault: Client ID, 4-digit MPIN, TOTP Secret inputs, Save & Encrypt."""
+# Page 11: Unified SettingsView imported from ui.settings_view (backed by BrokerVaultWidget & VaultManager)
+from ui.settings_view import SettingsView
 
-    def __init__(self, parent=None) -> None:
-        super().__init__("⚙ BROKER VAULT & DYNAMIC 2FA CREDENTIALS", "AES-256 encrypted credential management for Angel One, Shoonya, and Groww.", parent)
-        self.db = DatabaseHandler()
-        self._init_body()
-
-    def _init_body(self) -> None:
-        card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 16px;")
-        cl = QVBoxLayout(card)
-        cl.setSpacing(10)
-
-        cl.addWidget(QLabel("SELECT GATEWAY:", card))
-        self.combo_broker = QComboBox(card)
-        self.combo_broker.addItems(["ANGEL_ONE", "SHOONYA", "GROWW"])
-        cl.addWidget(self.combo_broker)
-
-        cl.addWidget(QLabel("Client ID / User Code:", card))
-        self.edit_client = QLineEdit(card)
-        self.edit_client.setPlaceholderText("e.g. A100982 or FA55421")
-        cl.addWidget(self.edit_client)
-
-        cl.addWidget(QLabel("4-Digit Login MPIN / Password:", card))
-        self.edit_mpin = QLineEdit(card)
-        self.edit_mpin.setEchoMode(QLineEdit.Password)
-        self.edit_mpin.setPlaceholderText("Enter 4-digit MPIN")
-        cl.addWidget(self.edit_mpin)
-
-        cl.addWidget(QLabel("32-Character Base32 TOTP Secret:", card))
-        self.edit_totp = QLineEdit(card)
-        self.edit_totp.setEchoMode(QLineEdit.Password)
-        self.edit_totp.setPlaceholderText("Enter Base32 TOTP Secret")
-        cl.addWidget(self.edit_totp)
-
-        # Action Buttons
-        btn_layout = QHBoxLayout()
-        btn_verify = QPushButton("Verify Live 2FA", card)
-        btn_verify.setStyleSheet("background-color: #2979ff; color: white; font-weight: bold; padding: 8px 14px; border-radius: 4px; border: none;")
-        try:
-            btn_verify.clicked.connect(self._verify_2fa)
-        except Exception:
-            pass
-
-        btn_save = QPushButton("Save & Encrypt (AES-256)", card)
-        btn_save.setStyleSheet("background-color: #00e676; color: #060b13; font-weight: 800; padding: 8px 14px; border-radius: 4px; border: none;")
-        try:
-            btn_save.clicked.connect(self._save_creds)
-        except Exception:
-            pass
-
-        btn_layout.addWidget(btn_verify)
-        btn_layout.addWidget(btn_save)
-        btn_layout.addStretch()
-        cl.addLayout(btn_layout)
-
-        self.layout_main.addWidget(card)
-
-    def _verify_2fa(self) -> None:
-        totp = self.edit_totp.text().strip()
-        code = self.db.generate_dynamic_totp(totp)
-        if code:
-            QMessageBox.information(self, "2FA Verified", f"Live TOTP Code Generated: {code}")
-        else:
-            QMessageBox.warning(self, "2FA Error", "Invalid Base32 TOTP secret.")
-
-    def _save_creds(self) -> None:
-        broker = self.combo_broker.currentText()
-        cid = self.edit_client.text().strip()
-        mpin = self.edit_mpin.text().strip()
-        totp = self.edit_totp.text().strip()
-        if not cid or not mpin or not totp:
-            QMessageBox.warning(self, "Validation Error", "Client ID, MPIN, and TOTP Secret are required.")
-            return
-
-        self.db.save_broker_credentials(
-            broker_name=broker,
-            client_id=cid,
-            login_mpin=mpin,
-            totp_secret=totp,
-            is_active=True
-        )
-        QMessageBox.information(self, "Encrypted", f"Credentials for {broker} encrypted & saved into AES-256 vault.")
 

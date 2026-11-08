@@ -25,7 +25,10 @@ secrets.json
 *.sqlite*
 database/*.db
 database/*.db*
+database/*.db-wal
+database/*.db-shm
 database/scrip_cache.json
+logs/*.log
 
 # Bytecode, Cache & IDE Metadata
 __pycache__/

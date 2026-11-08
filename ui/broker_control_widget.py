@@ -41,6 +41,10 @@ except ImportError:
         def setStyleSheet(self, s): pass
         def setLayout(self, l): pass
         def setSizePolicy(self, *args): pass
+        def setFixedSize(self, w, h): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setProperty(self, k, v): pass
     class QFrame(QWidget):
         NoFrame = 0
         def __init__(self, parent=None): pass
@@ -67,11 +71,18 @@ except ImportError:
         def setAlignment(self, a): pass
         def setFont(self, f): pass
     class QPushButton(QWidget):
-        def __init__(self, text="", parent=None): self.text = text
+        def __init__(self, text="", parent=None):
+            self.text = text
+            self.clicked = Signal()
+            self.toggled = Signal()
         def setText(self, t): self.text = t
         def setEnabled(self, e): pass
         def setProperty(self, k, v): pass
-        def clicked(self): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setCheckable(self, b): pass
+        def setChecked(self, b): pass
+        def isChecked(self): return False
     class QLineEdit(QWidget):
         Normal = 0
         Password = 1
@@ -81,10 +92,10 @@ except ImportError:
         def text(self): return self._text
         def setText(self, t): self._text = t
     class QCheckBox(QWidget):
-        def __init__(self, text="", parent=None): pass
+        def __init__(self, text="", parent=None):
+            self.toggled = Signal()
         def setChecked(self, c): pass
         def isChecked(self): return False
-        def toggled(self): pass
     class QMessageBox:
         @staticmethod
         def information(p, t, m): pass

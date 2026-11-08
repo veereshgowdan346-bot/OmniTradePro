@@ -32,26 +32,48 @@ except ImportError:
     class QWidget:
         def __init__(self, parent=None): pass
         def setStyleSheet(self, s): pass
-    class QFrame(QWidget): pass
+        def setFixedSize(self, w, h): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setProperty(self, k, v): pass
+    class QFrame(QWidget):
+        NoFrame = 0
+        def setFrameShape(self, s): pass
     class QVBoxLayout:
         def __init__(self, *args): pass
         def addWidget(self, w): pass
         def addLayout(self, l): pass
         def addStretch(self, *args): pass
+        def addSpacing(self, *args): pass
         def setContentsMargins(self, *args): pass
         def setSpacing(self, s): pass
     class QHBoxLayout(QVBoxLayout): pass
     class QGridLayout(QVBoxLayout):
         def addWidget(self, w, r, c, rs=1, cs=1): pass
+    class _TextStr(str):
+        def __call__(self):
+            return str(self)
+
     class QLabel:
-        def __init__(self, text="", parent=None): self.text = text
-        def setText(self, t): self.text = t
+        def __init__(self, text="", parent=None):
+            self.text = _TextStr(text)
+        def setText(self, t):
+            self.text = _TextStr(t)
         def setStyleSheet(self, s): pass
         def setPixmap(self, p): pass
         def setAlignment(self, a): pass
+        def setVisible(self, v): pass
+        def setProperty(self, k, v): pass
     class QPushButton:
         def __init__(self, text="", parent=None): self.text = text
         def setStyleSheet(self, s): pass
+        def setCheckable(self, b): pass
+        def setChecked(self, b): pass
+        def isChecked(self): return False
+        def setProperty(self, k, v): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setEnabled(self, e): pass
         def clicked(self): pass
     class QComboBox:
         def __init__(self, parent=None): pass

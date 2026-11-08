@@ -152,6 +152,8 @@ class AssetExecutionWorker(threading.Thread):
                     mode = task.get("mode", "PAPER")
 
                     if entry > 0.0:
+                        available_capital = task.get("capital") or task.get("available_capital")
+                        auto_reroute = task.get("auto_reroute_insufficient_margin", True)
                         order_res = self.order_router.execute_order(
                             symbol=symbol,
                             side=signal,
@@ -160,7 +162,9 @@ class AssetExecutionWorker(threading.Thread):
                             stop_loss=sl,
                             target_price=tgt,
                             mode=mode,
-                            current_market_price=current_price
+                            current_market_price=current_price,
+                            available_capital=available_capital,
+                            auto_reroute_insufficient_margin=auto_reroute
                         )
                         task["order_result"] = order_res
                         with self._lock:
@@ -294,6 +298,19 @@ class AssetWorkerPool:
         with self._lock:
             return {shard_id: worker.get_metrics() for shard_id, worker in self._workers.items()}
 
+    def get_eligible_shards(self, capital_inr: float) -> List[str]:
+        """
+        Filters and returns active shard IDs eligible for trading given available capital.
+        If capital < 150000.0 (₹1.5 Lakhs), commodity futures shards (GOLD, SILVER, CRUDE OIL)
+        are excluded to prevent RMS margin breach rejections, returning equity and index shards.
+        """
+        with self._lock:
+            all_shards = list(self._workers.keys())
+            if capital_inr >= 150000.0:
+                return all_shards
+            commodity_shards = {"GOLD_SHARD", "SILVER_SHARD", "CRUDEOIL_SHARD"}
+            return [s for s in all_shards if s not in commodity_shards]
+
     def wait_idle(self, timeout: float = 5.0) -> bool:
         """Waits until all worker queues are completely drained."""
         end_time = time.perf_counter() + timeout
@@ -315,3 +332,4 @@ class AssetWorkerPool:
         with self._lock:
             for worker in self._workers.values():
                 worker.stop(timeout=timeout)
+

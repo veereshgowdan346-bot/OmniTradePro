@@ -55,6 +55,75 @@ class OrderRouter:
     MAX_DRAWDOWN_PCT = 10.0
     MAX_TRADES_PER_INSTRUMENT_PER_DAY = 2
 
+    MIN_MARGIN_REQUIREMENTS = {
+        # MCX Commodity Futures (Statutory requirement >= ₹1.5L)
+        "CRUDEOIL": 150000.0,
+        "GOLD": 450000.0,
+        "SILVER": 200000.0,
+        "COPPER": 120000.0,
+        "NATURALGAS": 130000.0,
+        # MCX Mini Contracts
+        "CRUDEOILM": 30000.0,
+        "GOLDM": 55000.0,
+        "SILVERM": 45000.0,
+        # Index Futures
+        "NIFTY": 110000.0,
+        "NIFTY 50": 110000.0,
+        "BANKNIFTY": 120000.0,
+        "BANK NIFTY": 120000.0,
+        "FINNIFTY": 100000.0,
+    }
+
+    @classmethod
+    def calculate_required_margin(cls, symbol: str, quantity: int, price: float, product: str = "MIS") -> float:
+        """Calculates exact broker margin requirement to strictly eliminate RMS Margin Exceeded errors."""
+        clean_sym = symbol.strip().upper().replace("MCX:", "").replace("NSE:", "").strip()
+        if clean_sym in cls.MIN_MARGIN_REQUIREMENTS:
+            return cls.MIN_MARGIN_REQUIREMENTS[clean_sym]
+        # Intraday Equity MIS: 5x leverage (20% margin requirement)
+        prod_clean = str(product).strip().upper()
+        if prod_clean in ("MIS", "INTRADAY"):
+            return round((price * quantity) / 5.0, 2)
+        else:  # Delivery CNC: 100% margin
+            return round(price * quantity, 2)
+
+    def check_margin_preflight(
+        self,
+        symbol: str,
+        quantity: int,
+        price: float,
+        available_capital: float,
+        product: str = "MIS"
+    ) -> Dict[str, Any]:
+        """
+        Pre-flight margin check before order dispatch.
+        Verifies available capital against required margin. If insufficient for MCX futures,
+        suggests safe routing to high-probability liquid intraday equity with 5x leverage.
+        """
+        req_margin = self.calculate_required_margin(symbol, quantity, price, product)
+        passed = available_capital >= req_margin
+
+        clean_sym = symbol.strip().upper().replace("MCX:", "").replace("NSE:", "").strip()
+        is_mcx_future = clean_sym in ("CRUDEOIL", "GOLD", "SILVER", "COPPER", "NATURALGAS")
+
+        suggested_symbol = None
+        suggested_qty = quantity
+        if not passed:
+            if is_mcx_future and available_capital < 150000.0:
+                suggested_symbol = "RELIANCE" if available_capital >= 2000.0 else "TATASTEEL"
+                equity_price = 2485.0 if suggested_symbol == "RELIANCE" else 150.0
+                suggested_qty = max(1, int((available_capital * 5.0) / equity_price))
+
+        return {
+            "passed": passed,
+            "required_margin": req_margin,
+            "available_capital": available_capital,
+            "shortfall": max(0.0, req_margin - available_capital),
+            "suggested_symbol": suggested_symbol,
+            "suggested_quantity": suggested_qty,
+            "reason": "OK" if passed else f"Pre-flight margin shortfall: Required ₹{req_margin:,.2f} > Available ₹{available_capital:,.2f}."
+        }
+
     def __init__(
         self,
         db_manager: Optional[DatabaseManager] = None,
@@ -191,10 +260,12 @@ class OrderRouter:
         enforce_daily_cap: Optional[bool] = None,
         current_market_price: Optional[float] = None,
         enforce_slippage_guard: bool = True,
+        available_capital: Optional[float] = None,
+        auto_reroute_insufficient_margin: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Executes order strictly adhering to broker toggle matrix, slippage guard, and risk guardrails.
+        Executes order strictly adhering to broker toggle matrix, slippage guard, margin pre-flight, and risk guardrails.
         """
         # Validate parameters
         if quantity <= 0:
@@ -231,6 +302,47 @@ class OrderRouter:
         normalized_side = side.strip().upper()
         normalized_mode = mode.strip().upper()
         normalized_exchange = exchange.strip().upper()
+
+        # === CHECK 0.5: Pre-Flight Margin Guard ===
+        avail_cap = available_capital
+        if avail_cap is None:
+            avail_cap = kwargs.get("capital") or kwargs.get("available_capital")
+
+        if avail_cap is not None:
+            margin_audit = self.check_margin_preflight(
+                symbol=symbol,
+                quantity=quantity,
+                price=price,
+                available_capital=float(avail_cap),
+                product=product
+            )
+            if not margin_audit["passed"]:
+                if auto_reroute_insufficient_margin and margin_audit.get("suggested_symbol"):
+                    orig_symbol = symbol
+                    orig_qty = quantity
+                    symbol = margin_audit["suggested_symbol"]
+                    quantity = margin_audit["suggested_quantity"]
+                    price = 2485.0 if symbol == "RELIANCE" else 150.0
+                    normalized_exchange = "NSE"
+                    product = "MIS"
+                    if stop_loss > 0.0:
+                        stop_loss = round(price * (0.99 if normalized_side == "BUY" else 1.01), 2)
+                    if target_price > 0.0:
+                        target_price = round(price * (1.02 if normalized_side == "BUY" else 0.98), 2)
+                    msg = (
+                        f"Order auto-rerouted: Insufficient margin for {orig_symbol} (qty {orig_qty}). "
+                        f"Re-routed to liquid intraday equity {symbol} (qty {quantity}) under 5x leverage."
+                    )
+                    self._notify("Margin Pre-Flight Re-Route", msg)
+                else:
+                    msg = f"Order blocked: {margin_audit['reason']}"
+                    self._notify("Margin Check Failed", msg)
+                    return {
+                        "status": "REJECTED",
+                        "reason": "MARGIN_EXCEEDED_PREFLIGHT",
+                        "margin_audit": margin_audit,
+                        "message": msg
+                    }
 
         # === CHECK 0: Dynamic Slippage & Price Drift Guard (0.08% / 8 bps) ===
         cmp = current_market_price

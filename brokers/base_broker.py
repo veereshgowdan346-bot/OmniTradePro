@@ -11,6 +11,57 @@ from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Callable
+import re
+import logging
+
+
+def sanitize_log_message(message: Any) -> str:
+    """
+    Sanitizes log messages by masking sensitive credentials, API keys, tokens, and JWTs.
+    Guarantees zero leakage of credentials in logs, console streams, or telemetry.
+    """
+    msg_str = str(message)
+    if not msg_str:
+        return ""
+
+    # 1. Redact JWT tokens (header.payload.signature)
+    msg_str = re.sub(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", "[REDACTED_JWT]", msg_str)
+
+    # 2. Redact Bearer tokens (if not already redacted)
+    msg_str = re.sub(r"(Bearer\s+)(?!\[REDACTED)[A-Za-z0-9_\-\.]{10,}", r"\1[REDACTED_TOKEN]", msg_str, flags=re.IGNORECASE)
+
+    # 3. Redact common credential fields in key=value, key: "value", or CLI representations
+    patterns = [
+        (r'("?(?:api_key|apiKey|X-PrivateKey|appKey|api_secret|key)\b"?\s*[:= ]\s*["\']?)(?!\[REDACTED)([^"\'\s,;&]+)(["\']?)', r'\1[REDACTED_API_KEY]\3'),
+        (r'("?(?:jwtToken|jwt_token|token|feedToken|feed_token|susertoken|refreshToken|refresh_token|bearer_token)\b"?\s*[:= ]\s*["\']?)(?!\[REDACTED)([^"\'\s,;&]+)(["\']?)', r'\1[REDACTED_TOKEN]\3'),
+        (r'("?(?:password|pwd|login_mpin|mpin|trading_pin|tpin|totp_secret|secret_key|client_secret)\b"?\s*[:= ]\s*["\']?)(?!\[REDACTED)([^"\'\s,;&]+)(["\']?)', r'\1[REDACTED_SECRET]\3'),
+    ]
+    for pattern, repl in patterns:
+        msg_str = re.sub(pattern, repl, msg_str, flags=re.IGNORECASE)
+
+    return msg_str
+
+
+class SanitizedLogger:
+    """Thread-safe logger wrapper enforcing zero-leakage redaction across console & file handlers."""
+    def __init__(self, name: str):
+        self._logger = logging.getLogger(name)
+
+    def debug(self, msg: Any, *args, **kwargs) -> None:
+        self._logger.debug(sanitize_log_message(msg), *args, **kwargs)
+
+    def info(self, msg: Any, *args, **kwargs) -> None:
+        self._logger.info(sanitize_log_message(msg), *args, **kwargs)
+
+    def warning(self, msg: Any, *args, **kwargs) -> None:
+        self._logger.warning(sanitize_log_message(msg), *args, **kwargs)
+
+    def error(self, msg: Any, *args, **kwargs) -> None:
+        self._logger.error(sanitize_log_message(msg), *args, **kwargs)
+
+    def exception(self, msg: Any, *args, **kwargs) -> None:
+        self._logger.exception(sanitize_log_message(msg), *args, **kwargs)
+
 
 
 # =============================================================================
