@@ -3,6 +3,7 @@
 venv/
 ENV/
 env/
+*.zip
 
 # Master Encryption & Secret Keys (ABSOLUTE PROHIBITION)
 *.key
@@ -34,6 +35,9 @@ __pycache__/
 .idea/
 *.log
 logs/
+.claude-flow/
+.swarm/
+report.txt
 
 # Build Artifacts
 dist/

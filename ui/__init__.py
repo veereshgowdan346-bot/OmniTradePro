@@ -1,6 +1,7 @@
 """
 OmniTradePro / Chintu AI Trading Board v5.0 - UI Module
-Provides frosted glassmorphism interface components, charting, dashboard cards, 12 multi-page views, and main window.
+Provides frosted glassmorphism interface components, charting, dashboard cards,
+broker control matrix, 12 multi-page views, and main window orchestrator.
 """
 
 from ui.styles import GlassmorphismTheme
@@ -18,6 +19,7 @@ from ui.views import (
 )
 from ui.scanner_panel import ScannerPanel, MonteCarloOddsDialog
 from ui.order_panel import OrderPanel
+from ui.broker_control_widget import BrokerControlWidget, BrokerCard, BrokerCredentialsDialog
 from ui.main_window import MainWindow, DashboardView
 
 __all__ = [
@@ -51,5 +53,8 @@ __all__ = [
     "ScannerPanel",
     "MonteCarloOddsDialog",
     "OrderPanel",
+    "BrokerControlWidget",
+    "BrokerCard",
+    "BrokerCredentialsDialog",
     "MainWindow",
 ]

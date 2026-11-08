@@ -81,6 +81,7 @@ from ui.views import (
     RiskManagerView, ReportsView, SettingsView
 )
 from ui.scanner_panel import ScannerPanel
+from ui.broker_control_widget import BrokerControlWidget
 from database.db_handler import DatabaseHandler
 from core.risk_engine import RiskEngine
 from core.order_router import OrderRouter
@@ -115,6 +116,10 @@ class DashboardView(QScrollArea):
         tier1_layout.addWidget(self.chart_widget, 72)
         tier1_layout.addWidget(self.quick_trade, 28)
         self.layout_canvas.addLayout(tier1_layout)
+
+        # INTERACTIVE BROKER MATRIX: 3 Dedicated Cards (Angel One, Shoonya, Groww)
+        self.broker_control = BrokerControlWidget(parent=self.container)
+        self.layout_canvas.addWidget(self.broker_control)
 
         # TIER 2: Middle Row (Active Bots 48% + Portfolio 26% + Live P&L 26%)
         tier2_layout = QHBoxLayout()
@@ -218,6 +223,7 @@ class MainWindow(QMainWindow):
         self.chart_widget = self.dashboard_view.chart_widget
         self.quick_trade = self.dashboard_view.quick_trade
         self.order_panel = self.dashboard_view.quick_trade
+        self.broker_control = self.dashboard_view.broker_control
         self.active_bots_card = self.dashboard_view.active_bots_card
         self.portfolio_card = self.dashboard_view.portfolio_card
         self.live_pnl_card = self.dashboard_view.live_pnl_card
@@ -265,8 +271,45 @@ class MainWindow(QMainWindow):
             # 6. Stream tick receiver updates chart canvas & index tickers
             self.stream_worker.tick_received.connect(self._on_tick_received)
             self.stream_worker.connection_status.connect(self._on_connection_status)
+
+            # 7. Multi-Broker Dynamic 2FA & Execution Toggle Matrix Wiring
+            self.broker_control.trading_toggle_changed.connect(self._on_broker_trading_toggle_changed)
+            self.broker_control.broker_state_changed.connect(self._on_broker_state_changed)
+            self.order_router.notification_callback = self._on_router_notification
         except Exception:
             pass
+
+    def _on_broker_trading_toggle_changed(self, broker_name: str, enabled: bool) -> None:
+        """Synchronizes GUI broker execution switch into OrderRouter."""
+        self.order_router.set_broker_toggle(broker_name, enabled)
+        inst = self.broker_control.get_broker_instance(broker_name)
+        if inst:
+            self.order_router.register_broker_instance(broker_name, inst)
+
+    def _on_broker_state_changed(self, broker_name: str, new_state: str) -> None:
+        """Updates OrderRouter gateway registration and health telemetry."""
+        inst = self.broker_control.get_broker_instance(broker_name)
+        if inst:
+            self.order_router.register_broker_instance(broker_name, inst)
+
+        if new_state == "CONNECTED":
+            self.system_health_card.update_telemetry(
+                broker_connected=True,
+                broker_name=broker_name,
+                latency=38
+            )
+        elif new_state == "DISCONNECTED":
+            any_conn = any(self.broker_control.is_broker_connected(b) for b in ("ANGEL_ONE", "SHOONYA", "GROWW"))
+            if not any_conn:
+                self.system_health_card.update_telemetry(
+                    broker_connected=False,
+                    broker_name="DISCONNECTED",
+                    latency=None
+                )
+
+    def _on_router_notification(self, title: str, message: str) -> None:
+        """Surfaces non-blocking desktop warnings and execution alerts."""
+        QMessageBox.warning(self, title, message)
 
     def _switch_page(self, index: int) -> None:
         """Switches active view in QStackedWidget and synchronizes sidebar active highlights."""
@@ -338,7 +381,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_quick_trade_order(self, order_data: dict) -> None:
-        """Dispatches order through OrderRouter with pre-trade risk verification."""
+        """Dispatches order through OrderRouter with pre-trade risk verification and broker toggle matrix."""
         sym = order_data.get("symbol", "NIFTY 50")
         side = order_data.get("side", "BUY")
         qty = order_data.get("quantity", 50)
@@ -351,6 +394,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Risk Halt", f"Order rejected: {self.risk_engine.halt_reason}")
             return
 
+        # Determine routing mode: If any broker trading toggle is ON, route LIVE through active matrix
+        enabled_toggles = [b for b, toggled in self.order_router.get_all_toggles().items() if toggled]
+        target_mode = "LIVE" if enabled_toggles else "PAPER"
+
         res = self.order_router.execute_order(
             symbol=sym,
             exchange="NSE",
@@ -359,18 +406,27 @@ class MainWindow(QMainWindow):
             price=price,
             order_type="MARKET",
             product="MIS",
-            mode="PAPER"
+            mode=target_mode
         )
 
         self._refresh_real_database_metrics()
 
-        if res.get("status") in ("FILLED", "OPEN"):
+        if res.get("status") in ("FILLED", "SUBMITTED", "OPEN"):
+            b_info = res.get("broker") or ", ".join(res.get("dispatched_brokers", [])) or "PAPER"
+            order_id = res.get("order_id") or res.get("trade_id")
             QMessageBox.information(
                 self,
                 "Order Executed",
-                f"Order {res.get('order_id')} successfully executed!\n"
+                f"Order {order_id} successfully executed!\n"
+                f"Mode: {target_mode} | Gateway: {b_info}\n"
                 f"Side: {side} | Qty: {qty} | Price: ₹{price:,.2f}\n"
-                f"Friction Buffer: ₹60.00 Applied."
+                f"Statutory Friction Buffer: ₹60.00 Applied."
+            )
+        elif res.get("status") == "REJECTED":
+            QMessageBox.warning(
+                self,
+                "Order Blocked / Rejected",
+                f"Execution Gate Notice:\n{res.get('message', 'Order rejected')}"
             )
 
     def _on_tick_received(self, tick: dict) -> None:

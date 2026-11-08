@@ -136,3 +136,4 @@ shiva/
 ## Disclaimer
 
 *Trading financial instruments in Indian markets (NSE, BSE, MCX) involves substantial risk of loss. OmniTradePro is an institutional trading system. Users are responsible for configuring their own risk thresholds and broker authorizations.*
+
