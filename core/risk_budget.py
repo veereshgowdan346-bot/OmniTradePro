@@ -8,7 +8,7 @@ with uncapped continuous intraday session execution.
 """
 
 import math
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 
 
 class RiskBudget:
@@ -24,6 +24,110 @@ class RiskBudget:
     MIN_NET_PROFIT_HURDLE_INR = 10.0
     MAX_CAPITAL_RISK_RATIO = 0.10  # 10% floor
     MAX_SLIPPAGE_PCT = 0.0008      # 0.08% / 8 bps dynamic slippage guardrail
+
+    # Front-page execution and risk controller state
+    _current_mode: str = "PAPER"
+    _user_trade_capital: float = 1000.0
+    _user_max_sl: float = 80.0
+
+    @classmethod
+    def update_risk_parameters(cls, mode: str, trade_capital: float, max_sl: float) -> None:
+        """Global update hook called when front-page risk controller applies new rules."""
+        clean_mode = str(mode).strip().upper()
+        if clean_mode in ("PAPER", "LIVE"):
+            cls._current_mode = clean_mode
+        if trade_capital > 0:
+            cls._user_trade_capital = float(trade_capital)
+        if max_sl > 0:
+            cls._user_max_sl = float(max_sl)
+
+    @classmethod
+    def get_risk_parameters(cls) -> Dict[str, Any]:
+        """Returns the currently active user risk control parameters."""
+        return {
+            "mode": cls._current_mode,
+            "trade_capital": cls._user_trade_capital,
+            "max_sl": cls._user_max_sl
+        }
+
+    @classmethod
+    def calculate_effective_capital(
+        cls,
+        mode: str,
+        user_allocated_capital: float,
+        account_balance: Optional[float] = None
+    ) -> float:
+        """
+        Determines effective capital ceiling:
+        - LIVE: min(account_balance, user_allocated_capital) if account_balance > 0, else user_allocated_capital
+        - PAPER: user_allocated_capital
+        """
+        normalized_mode = str(mode).strip().upper()
+        user_cap = float(user_allocated_capital) if user_allocated_capital > 0 else cls._user_trade_capital
+        if normalized_mode == "LIVE":
+            if account_balance is not None and account_balance > 0:
+                return round(min(float(account_balance), user_cap), 2)
+            return user_cap
+        else:
+            return user_cap
+
+    @classmethod
+    def calculate_uniform_lot_size(
+        cls,
+        entry_price: float,
+        effective_capital: float,
+        leverage: float = 5.0
+    ) -> int:
+        """
+        Uniform lot quantity calculation:
+        qty = floor((effective_capital * leverage) / entry_price)
+        Returns 0 if margin is insufficient to buy even 1 lot/share.
+        """
+        if entry_price <= 0.0 or effective_capital <= 0.0:
+            return 0
+        raw_qty = math.floor((effective_capital * leverage) / entry_price)
+        return int(max(0, raw_qty))
+
+    @classmethod
+    def derive_bracket_stop_loss(
+        cls,
+        entry_price: float,
+        side: str,
+        quantity: int,
+        user_max_sl: float
+    ) -> float:
+        """
+        Dynamically calculates bracket stop-loss price such that:
+        abs(entry_price - sl_trigger_price) * qty <= user_max_sl
+        """
+        if entry_price <= 0.0 or quantity <= 0 or user_max_sl <= 0.0:
+            return 0.0
+        max_dist_per_share = user_max_sl / quantity
+        normalized_side = str(side).strip().upper()
+        if normalized_side == "BUY":
+            sl_price = max(0.05, entry_price - max_dist_per_share)
+        else:  # SELL / SHORT
+            sl_price = entry_price + max_dist_per_share
+        return round(sl_price, 2)
+
+    @classmethod
+    def is_circuit_breaker_tripped(
+        cls,
+        cumulative_realized_loss: float,
+        user_max_sl: float,
+        daily_floor: float = 2000.0
+    ) -> tuple[bool, str]:
+        """
+        Checks if cumulative intraday realized loss >= (user_max_sl * 2.5) or daily floor.
+        Returns: (is_tripped: bool, reason: str)
+        """
+        loss = abs(float(cumulative_realized_loss))
+        sl_threshold = round(user_max_sl * 2.5, 2)
+        if loss >= sl_threshold:
+            return True, f"Cumulative intraday realized loss ₹{loss:.2f} >= 2.5x max SL limit (₹{sl_threshold:.2f})."
+        if loss >= daily_floor:
+            return True, f"Cumulative intraday realized loss ₹{loss:.2f} >= statutory daily floor (₹{daily_floor:.2f})."
+        return False, "OK"
 
     @classmethod
     def calculate_marketable_limit_price(

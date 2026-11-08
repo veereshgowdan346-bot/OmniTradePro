@@ -296,6 +296,24 @@ class MainWindow(QMainWindow):
             self.broker_control.trading_toggle_changed.connect(self._on_broker_trading_toggle_changed)
             self.broker_control.broker_state_changed.connect(self._on_broker_state_changed)
             self.order_router.notification_callback = self._on_router_notification
+
+            # 8. Execution Mode & Front-Page Risk Controller Wiring
+            if hasattr(self.sidebar, "risk_controller") and self.sidebar.risk_controller:
+                self.sidebar.risk_controller.router = self.order_router
+                try:
+                    self.sidebar.risk_controller.risk_parameters_updated.connect(
+                        lambda m, c, s: self.order_router.update_risk_parameters(m, c, s, enforce=True)
+                    )
+                except Exception:
+                    pass
+            if hasattr(self.broker_control, "risk_controller") and self.broker_control.risk_controller:
+                self.broker_control.risk_controller.router = self.order_router
+                try:
+                    self.broker_control.risk_controller.risk_parameters_updated.connect(
+                        lambda m, c, s: self.order_router.update_risk_parameters(m, c, s, enforce=True)
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 

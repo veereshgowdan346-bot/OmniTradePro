@@ -180,6 +180,14 @@ class DatabaseManager:
                 halt_reason TEXT DEFAULT '',
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS execution_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                mode TEXT NOT NULL DEFAULT 'PAPER',
+                trade_capital REAL NOT NULL DEFAULT 1000.0,
+                max_sl REAL NOT NULL DEFAULT 80.0,
+                updated_at TEXT NOT NULL
+            );
             """)
             conn.commit()
             cursor.close()
@@ -629,6 +637,83 @@ class DatabaseManager:
                 "unrealized_pnl": unrealized_pnl,
                 "total_pnl": realized_pnl + unrealized_pnl
             }
+
+    # =========================================================================
+    # Execution & Risk Configuration Interface
+    # =========================================================================
+
+    def get_execution_config(self) -> Dict[str, Any]:
+        """
+        Retrieves persistent front-page execution & risk parameters.
+        Returns: {'mode': 'PAPER'|'LIVE', 'trade_capital': float, 'max_sl': float, 'updated_at': str}
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT mode, trade_capital, max_sl, updated_at FROM execution_config WHERE id = 1")
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "mode": str(row["mode"]).strip().upper(),
+                        "trade_capital": float(row["trade_capital"]),
+                        "max_sl": float(row["max_sl"]),
+                        "updated_at": str(row["updated_at"])
+                    }
+                else:
+                    # Initialize default record
+                    cursor.execute("""
+                        INSERT INTO execution_config (id, mode, trade_capital, max_sl, updated_at)
+                        VALUES (1, 'PAPER', 1000.0, 80.0, ?)
+                    """, (now_iso,))
+                    conn.commit()
+                    return {
+                        "mode": "PAPER",
+                        "trade_capital": 1000.0,
+                        "max_sl": 80.0,
+                        "updated_at": now_iso
+                    }
+            except Exception:
+                return {
+                    "mode": "PAPER",
+                    "trade_capital": 1000.0,
+                    "max_sl": 80.0,
+                    "updated_at": now_iso
+                }
+            finally:
+                cursor.close()
+
+    def save_execution_config(self, mode: str, trade_capital: float, max_sl: float) -> bool:
+        """
+        Persists updated execution mode, trade capital limit, and stop loss limit into execution_config.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        clean_mode = str(mode).strip().upper()
+        if clean_mode not in ("PAPER", "LIVE"):
+            clean_mode = "PAPER"
+        clean_capital = max(100.0, float(trade_capital))
+        clean_max_sl = max(10.0, float(max_sl))
+
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    INSERT INTO execution_config (id, mode, trade_capital, max_sl, updated_at)
+                    VALUES (1, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        mode = excluded.mode,
+                        trade_capital = excluded.trade_capital,
+                        max_sl = excluded.max_sl,
+                        updated_at = excluded.updated_at
+                """, (clean_mode, clean_capital, clean_max_sl, now_iso))
+                conn.commit()
+                return True
+            except Exception:
+                return False
+            finally:
+                cursor.close()
 
     def close(self) -> None:
         """Closes the current thread's connection if active."""

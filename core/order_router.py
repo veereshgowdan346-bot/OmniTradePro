@@ -185,8 +185,53 @@ class OrderRouter:
         # Circuit Breaker State
         self._engine_locked: bool = False
 
+        # Front-page Execution Mode & Risk Controller State
+        self.execution_mode: str = "PAPER"
+        self.user_trade_capital: float = 1000.0
+        self.user_max_sl: float = 80.0
+        self.enforce_user_risk_limits: bool = False
+        self._load_execution_config()
+
         # Synchronize initial toggles from vault if available
         self._sync_toggles_from_vault()
+
+    def _load_execution_config(self) -> None:
+        """Loads persistent execution mode, trade capital, and max stop-loss from SQLite."""
+        try:
+            if hasattr(self.db_manager, "get_execution_config"):
+                cfg = self.db_manager.get_execution_config()
+                self.execution_mode = str(cfg.get("mode", "PAPER")).strip().upper()
+                self.user_trade_capital = float(cfg.get("trade_capital", 1000.0))
+                self.user_max_sl = float(cfg.get("max_sl", 80.0))
+                RiskBudget.update_risk_parameters(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+        except Exception:
+            pass
+
+    def update_risk_parameters(
+        self,
+        mode: str,
+        trade_capital: float,
+        max_sl: float,
+        enforce: bool = True
+    ) -> None:
+        """
+        Updates user-configured risk controller parameters, broadcasts to RiskBudget, and commits to SQLite.
+        Uniformly enforced across PAPER and LIVE execution pipelines.
+        """
+        clean_mode = str(mode).strip().upper()
+        if clean_mode in ("PAPER", "LIVE"):
+            self.execution_mode = clean_mode
+        if trade_capital > 0:
+            self.user_trade_capital = float(trade_capital)
+        if max_sl > 0:
+            self.user_max_sl = float(max_sl)
+        self.enforce_user_risk_limits = bool(enforce)
+        RiskBudget.update_risk_parameters(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+        if hasattr(self.db_manager, "save_execution_config"):
+            try:
+                self.db_manager.save_execution_config(self.execution_mode, self.user_trade_capital, self.user_max_sl)
+            except Exception:
+                pass
 
     def _sync_toggles_from_vault(self) -> None:
         """Synchronize broker trading toggles from vault state."""
@@ -282,6 +327,10 @@ class OrderRouter:
         if price <= 0.0:
             raise ValueError(f"Execution price must be > 0.0, got {price}")
 
+        normalized_side = side.strip().upper()
+        normalized_mode = self.execution_mode if (mode is None or mode == "DEFAULT") else mode.strip().upper()
+        normalized_exchange = exchange.strip().upper()
+
         # === CRITICAL: Circuit Breaker Check ===
         if self._engine_locked:
             self._notify("Circuit Breaker", "Daily loss limit exceeded. Trading engine locked.")
@@ -290,6 +339,65 @@ class OrderRouter:
                 "reason": "ENGINE_LOCKED",
                 "message": "Daily loss limit exceeded. Trading engine locked."
             }
+
+        # Dynamic Circuit Breaker: Realized loss >= (user_max_sl * 2.5) or daily floor
+        daily_realized = abs(self._daily_loss_tracker.get("realized", 0.0))
+        cb_tripped, cb_reason = RiskBudget.is_circuit_breaker_tripped(
+            cumulative_realized_loss=daily_realized,
+            user_max_sl=self.user_max_sl
+        )
+        if cb_tripped:
+            self._engine_locked = True
+            msg = f"Circuit Breaker TRIPPED: {cb_reason} Trading engine locked."
+            self._notify("Circuit Breaker", msg)
+            return {
+                "status": "REJECTED",
+                "reason": "CIRCUIT_BREAKER_TRIPPED",
+                "message": msg
+            }
+
+        # === User Risk Controller Sizing & Margin Ceiling Enforcement ===
+        should_enforce_user_risk = kwargs.get("enforce_user_risk_limits", self.enforce_user_risk_limits)
+        user_cap = kwargs.get("user_allocated_capital") or kwargs.get("trade_capital") or self.user_trade_capital
+
+        if should_enforce_user_risk or kwargs.get("user_allocated_capital") is not None:
+            effective_capital = RiskBudget.calculate_effective_capital(
+                mode=normalized_mode,
+                user_allocated_capital=user_cap,
+                account_balance=available_capital
+            )
+            max_allowed_qty = RiskBudget.calculate_uniform_lot_size(
+                entry_price=price,
+                effective_capital=effective_capital,
+                leverage=5.0
+            )
+            if max_allowed_qty < 1:
+                reject_msg = f"[RISK REJECT] Required margin exceeds user limit ₹{effective_capital:,.2f}."
+                self._notify("Risk Limit Breach", reject_msg)
+                return {
+                    "status": "REJECTED",
+                    "reason": "CAPITAL_MARGIN_EXCEEDED",
+                    "effective_capital": effective_capital,
+                    "message": reject_msg
+                }
+
+            if quantity <= 0:
+                quantity = max_allowed_qty
+            else:
+                quantity = min(quantity, max_allowed_qty)
+
+            # Dynamically derive or clamp bracket stop-loss price
+            derived_sl = RiskBudget.derive_bracket_stop_loss(
+                entry_price=price,
+                side=normalized_side,
+                quantity=quantity,
+                user_max_sl=self.user_max_sl
+            )
+            if stop_loss <= 0.0 or kwargs.get("derive_stop_loss", False):
+                stop_loss = derived_sl
+            else:
+                if abs(price - stop_loss) * quantity > self.user_max_sl:
+                    stop_loss = derived_sl
 
         # === CHECK: Daily Trade Cap (Strictly Max 2 Trades per Instrument per Day) ===
         should_enforce_cap = self.enforce_daily_trade_cap if enforce_daily_cap is None else enforce_daily_cap
@@ -307,10 +415,6 @@ class OrderRouter:
                         "reason": "DAILY_TRADE_CAP_EXCEEDED",
                         "message": msg
                     }
-
-        normalized_side = side.strip().upper()
-        normalized_mode = mode.strip().upper()
-        normalized_exchange = exchange.strip().upper()
 
         # === CHECK 0.5: Pre-Flight Margin Guard ===
         avail_cap = available_capital

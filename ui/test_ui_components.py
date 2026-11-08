@@ -245,8 +245,56 @@ def run_tests() -> bool:
 
         print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} QStackedWidget 12-Page Routing Certified: All sidebar navigation switches operational")
 
+        # =====================================================================
+        # 9. Front-Page Execution Mode & Risk Controller Integration Test
+        # =====================================================================
+        print(f"\n{ANSI.YELLOW}{ANSI.BOLD}▶ 9. FRONT-PAGE EXECUTION MODE & RISK CONTROLLER TEST{ANSI.RESET}")
+        print(f"  {'-' * 76}")
+
+        assert hasattr(win.sidebar, "risk_controller") and win.sidebar.risk_controller is not None, "Sidebar missing risk_controller"
+        assert hasattr(win.broker_control, "risk_controller") and win.broker_control.risk_controller is not None, "BrokerControlWidget missing risk_controller"
+
+        w_side = win.sidebar.risk_controller
+        w_dash = win.broker_control.risk_controller
+
+        # Test applying new parameters from sidebar
+        w_side.current_mode = "LIVE"
+        w_side.spin_capital.setValue(2500.0)
+        w_side.spin_max_sl.setValue(120.0)
+        w_side._on_apply_clicked()
+
+        # Verify SQLite persistence
+        db_cfg = win.db.get_execution_config()
+        assert db_cfg["mode"] == "LIVE", f"Expected mode LIVE in SQLite, got {db_cfg['mode']}"
+        assert db_cfg["trade_capital"] == 2500.0, f"Expected capital 2500 in SQLite, got {db_cfg['trade_capital']}"
+        assert db_cfg["max_sl"] == 120.0, f"Expected max_sl 120 in SQLite, got {db_cfg['max_sl']}"
+
+        # Verify two-way synchronization between sidebar and dashboard risk widgets
+        assert w_dash.current_mode == "LIVE", "Dashboard risk widget failed to synchronize mode"
+        assert w_dash.spin_capital.value() == 2500.0, "Dashboard risk widget failed to synchronize capital"
+        assert w_dash.spin_max_sl.value() == 120.0, "Dashboard risk widget failed to synchronize max_sl"
+        assert "2,500" in w_dash.lbl_status.text()
+        assert "120" in w_dash.lbl_status.text()
+
+        # Verify OrderRouter received parameters
+        assert win.order_router.execution_mode == "LIVE"
+        assert win.order_router.user_trade_capital == 2500.0
+        assert win.order_router.user_max_sl == 120.0
+
+        # Reset back to default PAPER mode
+        w_side.current_mode = "PAPER"
+        w_side.spin_capital.setValue(1000.0)
+        w_side.spin_max_sl.setValue(80.0)
+        w_side._on_apply_clicked()
+
+        assert win.order_router.execution_mode == "PAPER"
+        assert win.order_router.user_trade_capital == 1000.0
+        assert win.order_router.user_max_sl == 80.0
+
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Front-Page Risk Controller Verified: Mode toggle, capital limit, max SL, and live two-way sync certified")
+
         print("\n" + "=" * 80)
-        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL 8 UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
+        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL 9 UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
         print(f"{ANSI.GREEN}Frosted glassmorphism theme, multi-broker vault, high-performance charting,")
         print(f"risk-gated order dispatch, and main window orchestrator are ready for production.{ANSI.RESET}\n")
 

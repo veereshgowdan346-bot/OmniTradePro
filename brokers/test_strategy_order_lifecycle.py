@@ -104,7 +104,7 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     # DIMENSION 1: STRATEGY CONSENSUS EVALUATION
     # =========================================================================
     def test_01_strategies_voting_and_quorum(self):
-        print(f"\n{ANSI.BOLD}▶ 1. STRATEGY CONSENSUS EVALUATION (4-ALGORITHM MATRIX){ANSI.RESET}")
+        print(f"\n{ANSI.BOLD}== 1. STRATEGY CONSENSUS EVALUATION (4-ALGORITHM MATRIX){ANSI.RESET}")
         print("  " + "-" * 76)
 
         # Slice bar 32 of authentic 2025 crude oil data (known unanimous breakout)
@@ -156,7 +156,7 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     # DIMENSION 2: COMPLETE RISK PIPELINE VERIFICATION
     # =========================================================================
     def test_02_predictive_gate_and_risk_budget(self):
-        print(f"\n{ANSI.BOLD}▶ 2. RISK PIPELINE & PREDICTIVE PROBABILITY GATE{ANSI.RESET}")
+        print(f"\n{ANSI.BOLD}== 2. RISK PIPELINE & PREDICTIVE PROBABILITY GATE{ANSI.RESET}")
         print("  " + "-" * 76)
 
         slice_160 = self.df_crude.iloc[120:160].reset_index(drop=True)
@@ -243,7 +243,7 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     # DIMENSION 3: ORDER PLACEMENT & IMMEDIATE CANCEL/SQUARE-OFF LIFECYCLE
     # =========================================================================
     def test_03_order_placement_and_immediate_cancel(self):
-        print(f"\n{ANSI.BOLD}▶ 3. ORDER PLACEMENT & IMMEDIATE CANCEL/SQUARE-OFF LIFECYCLE{ANSI.RESET}")
+        print(f"\n{ANSI.BOLD}== 3. ORDER PLACEMENT & IMMEDIATE CANCEL/SQUARE-OFF LIFECYCLE{ANSI.RESET}")
         print("  " + "-" * 76)
 
         router = OrderRouter(vault_manager=self.vault)
@@ -336,7 +336,7 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     # DIMENSION 4: MULTI-BROKER INTEGRITY & TWO-WAY SETTINGS SYNCHRONIZATION
     # =========================================================================
     def test_04_multi_broker_vault_and_two_way_sync(self):
-        print(f"\n{ANSI.BOLD}▶ 4. MULTI-BROKER VAULT & TWO-WAY SETTINGS SYNCHRONIZATION{ANSI.RESET}")
+        print(f"\n{ANSI.BOLD}== 4. MULTI-BROKER VAULT & TWO-WAY SETTINGS SYNCHRONIZATION{ANSI.RESET}")
         print("  " + "-" * 76)
 
         # 1. Decrypt credentials for all 3 brokers
@@ -372,7 +372,7 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     # DIMENSION 5: STRICT PAGE ISOLATION AUDIT
     # =========================================================================
     def test_05_page_isolation(self):
-        print(f"\n{ANSI.BOLD}▶ 5. STRICT PAGE ISOLATION AUDIT (LIVE TRADING VS DASHBOARD){ANSI.RESET}")
+        print(f"\n{ANSI.BOLD}== 5. STRICT PAGE ISOLATION AUDIT (LIVE TRADING VS DASHBOARD){ANSI.RESET}")
         print("  " + "-" * 76)
 
         win = MainWindow()
@@ -396,6 +396,88 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
         self.assertEqual(win.stacked_widget.currentWidget(), win.dashboard_view)
         print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Page Isolation Verified: Live Trading View (Page 1) strictly isolated from Dashboard (Page 0)")
 
+    # =========================================================================
+    # DIMENSION 6: FRONT-PAGE RISK CONTROLLER & UNIFORM RISK ENFORCEMENT
+    # =========================================================================
+    def test_06_uniform_risk_controller_enforcement(self):
+        print(f"\n{ANSI.BOLD}== 6. FRONT-PAGE RISK CONTROLLER & UNIFORM RISK ENFORCEMENT{ANSI.RESET}")
+        print("  " + "-" * 76)
+
+        router = OrderRouter(vault_manager=self.vault)
+
+        # 1. Update rules to PAPER mode: Capital ₹1,000, Max SL ₹80
+        router.update_risk_parameters(mode="PAPER", trade_capital=1000.0, max_sl=80.0, enforce=True)
+        self.assertEqual(router.execution_mode, "PAPER")
+        self.assertEqual(router.user_trade_capital, 1000.0)
+        self.assertEqual(router.user_max_sl, 80.0)
+
+        # A. Margin Ceiling / Lot Sizing: Order exceeding user capital limit (price ₹6,000 > ₹1,000 * 5)
+        res_expensive = router.execute_order(
+            symbol="EXPENSIVE",
+            side="BUY",
+            quantity=1,
+            price=6000.0,
+            stop_loss=5900.0,
+            target_price=6100.0
+        )
+        self.assertEqual(res_expensive["status"], "REJECTED")
+        self.assertEqual(res_expensive["reason"], "CAPITAL_MARGIN_EXCEEDED")
+        self.assertIn("[RISK REJECT] Required margin exceeds user limit", res_expensive["message"])
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Margin Ceiling Rejection Verified: {res_expensive['message']}")
+
+        # B. Lot Sizing & Dynamic Bracket Stop-Loss Derivation in PAPER mode
+        # Entry price ₹500, user capital ₹1,000 -> max_qty = floor(5000 / 500) = 10
+        # Dynamic SL derivation: abs(500 - sl) * 10 <= 80 -> sl = 492.0
+        # Target ₹520 -> Gross profit (520 - 500) * 10 = ₹200 >= ₹70 hurdle
+        res_paper = router.execute_order(
+            symbol="AFFORDABLE",
+            side="BUY",
+            quantity=50,
+            price=500.0,
+            target_price=520.0
+        )
+        self.assertEqual(res_paper["status"], "FILLED")
+        self.assertEqual(res_paper["quantity"], 10, "Quantity must be clamped to user margin ceiling")
+        self.assertEqual(res_paper["stop_loss"], 492.0, "Bracket SL must be derived such that risk <= ₹80")
+        total_risk = round(abs(500.0 - res_paper["stop_loss"]) * res_paper["quantity"], 2)
+        self.assertLessEqual(total_risk, 80.0)
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Uniform PAPER Sizing & Bracket SL: Qty={res_paper['quantity']}, SL=₹{res_paper['stop_loss']:.2f}, Risk=₹{total_risk:.2f} <= ₹80.00")
+
+        # 2. Update rules to LIVE mode: Capital ₹2,500, Max SL ₹120
+        router.update_risk_parameters(mode="LIVE", trade_capital=2500.0, max_sl=120.0, enforce=True)
+        self.assertEqual(router.execution_mode, "LIVE")
+        self.assertEqual(router.user_trade_capital, 2500.0)
+        self.assertEqual(router.user_max_sl, 120.0)
+
+        # Test effective capital clamping when account balance is ₹1,500 (< ₹2,500 limit)
+        eff_live = RiskBudget.calculate_effective_capital(mode="LIVE", user_allocated_capital=2500.0, account_balance=1500.0)
+        self.assertEqual(eff_live, 1500.0, "LIVE mode must clamp to min(account_balance, user_capital)")
+        live_qty = RiskBudget.calculate_uniform_lot_size(entry_price=500.0, effective_capital=eff_live, leverage=5.0)
+        self.assertEqual(live_qty, 15, "1500 * 5 / 500 = 15 shares")
+        live_sl = RiskBudget.derive_bracket_stop_loss(entry_price=500.0, side="BUY", quantity=live_qty, user_max_sl=120.0)
+        self.assertEqual(live_sl, 492.0, "Derived SL: 500 - (120 / 15) = 492.0")
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Uniform LIVE Sizing & Clamping: Effective Cap=₹{eff_live:.2f}, Qty={live_qty}, Derived SL=₹{live_sl:.2f}")
+
+        # 3. Dynamic Intraday Circuit Breaker Trip
+        # Cumulative realized loss >= (user_max_sl * 2.5) -> 120 * 2.5 = 300.0
+        router._daily_loss_tracker["realized"] = 350.0
+        res_cb = router.execute_order(
+            symbol="AFFORDABLE",
+            side="BUY",
+            quantity=5,
+            price=500.0,
+            target_price=520.0
+        )
+        self.assertEqual(res_cb["status"], "REJECTED")
+        self.assertEqual(res_cb["reason"], "CIRCUIT_BREAKER_TRIPPED")
+        self.assertTrue(router._engine_locked)
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Circuit Breaker Tripped: {res_cb['message']}")
+
+        # Reset parameters and unlock
+        router._engine_locked = False
+        router._daily_loss_tracker["realized"] = 0.0
+        router.update_risk_parameters(mode="PAPER", trade_capital=1000.0, max_sl=80.0, enforce=False)
+
 
 def run_benchmark():
     """Runs the suite and outputs the required ASCII summary matrix."""
@@ -413,6 +495,7 @@ def run_benchmark():
     print(f"  {'Pre-Flight Order Placement & Immediate Cancellation':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
     print(f"  {'Settings Synchronization across Angel One, Shoonya, Groww':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
     print(f"  {'Page Isolation (Live Trading View vs Dashboard)':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
+    print(f"  {'Execution Mode & Front-Page Risk Controller Enforcement':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
     print("=" * 80 + "\n")
 
     return 0 if result.wasSuccessful() else 1

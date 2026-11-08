@@ -64,8 +64,25 @@ except ImportError:
         def setAlignment(self, a): pass
         def setVisible(self, v): pass
         def setProperty(self, k, v): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setFixedSize(self, w, h): pass
+    class Signal:
+        def __init__(self, *types):
+            self._callbacks = []
+        def connect(self, f):
+            self._callbacks.append(f)
+        def emit(self, *args):
+            for cb in list(self._callbacks):
+                try:
+                    cb(*args)
+                except Exception:
+                    pass
     class QPushButton:
-        def __init__(self, text="", parent=None): self.text = text
+        def __init__(self, text="", parent=None):
+            self.text = text
+            self.clicked = Signal()
+            self.toggled = Signal()
         def setStyleSheet(self, s): pass
         def setCheckable(self, b): pass
         def setChecked(self, b): pass
@@ -74,7 +91,6 @@ except ImportError:
         def setFixedWidth(self, w): pass
         def setFixedHeight(self, h): pass
         def setEnabled(self, e): pass
-        def clicked(self): pass
     class QComboBox:
         def __init__(self, parent=None): pass
         def addItems(self, items): pass
@@ -407,7 +423,7 @@ class LeftSidebar(QFrame):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(140)
+        self.setFixedWidth(160)
         self.setStyleSheet("""
             QFrame {
                 background-color: #070d18;
@@ -420,8 +436,8 @@ class LeftSidebar(QFrame):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 8)
+        layout.setSpacing(3)
 
         for idx, text in enumerate(self.NAV_ITEMS):
             btn = QPushButton(text, self)
@@ -433,6 +449,16 @@ class LeftSidebar(QFrame):
             self.buttons.append(btn)
 
         self._refresh_styles()
+
+        layout.addSpacing(6)
+
+        # Embedded Compact Front-Page Execution & Risk Controller
+        try:
+            from ui.quick_risk_widget import QuickRiskControlWidget
+            self.risk_controller = QuickRiskControlWidget(self)
+            layout.addWidget(self.risk_controller)
+        except Exception:
+            self.risk_controller = None
 
         layout.addStretch()
 

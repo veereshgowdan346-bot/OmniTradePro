@@ -688,7 +688,17 @@ class BrokerControlWidget(QFrame):
             card.disconnect_requested.connect(self._handle_disconnect_request)
             card.trading_toggled.connect(self._handle_trading_toggled)
             self.cards[b_name] = card
-            cards_layout.addWidget(card, 1)
+            cards_layout.addWidget(card, 3)
+
+        # Embedded Front-Page Execution Mode & Risk Controller Card
+        try:
+            from ui.quick_risk_widget import QuickRiskControlWidget
+            self.risk_card = QuickRiskControlWidget(self)
+            self.risk_controller = self.risk_card
+            cards_layout.addWidget(self.risk_card, 2)
+        except Exception:
+            self.risk_card = None
+            self.risk_controller = None
 
         root_layout.addLayout(cards_layout)
 
