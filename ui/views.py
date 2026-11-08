@@ -171,6 +171,7 @@ class LiveTradingView(BasePageView):
 
         # Chart on Left (70%)
         self.chart = ChartWidget(self.container)
+        self.chart_widget = self.chart
         split_layout.addWidget(self.chart, 70)
 
         # DOM & Ladder on Right (30%)

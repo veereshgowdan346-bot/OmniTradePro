@@ -226,6 +226,18 @@ def run_tests() -> bool:
         win._switch_page(0)
         assert win.stacked_widget.currentIndex() == 0
 
+        # C. Strict View Isolation Audit: Live Trading View (Page 1) vs Dashboard (Page 0)
+        win._switch_page(1)
+        assert win.stacked_widget.currentIndex() == 1
+        assert win.stacked_widget.currentWidget() == win.live_trading_view
+        assert win.live_trading_view is not win.dashboard_view, "LiveTradingView must be an independent isolated instance"
+        assert hasattr(win.live_trading_view, "chart_widget"), "LiveTradingView missing dedicated chart_widget"
+        
+        win._switch_page(0)
+        assert win.stacked_widget.currentIndex() == 0
+        assert win.stacked_widget.currentWidget() == win.dashboard_view
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Page Isolation Verified: Live Trading View (Page 1) strictly isolated from Dashboard (Page 0)")
+
         # Verify emergency kill switch triggers risk halt globally
         win.risk_engine.is_halted = True
         assert win.risk_engine.is_halted is True, "Emergency Kill Switch failed to trip risk engine"

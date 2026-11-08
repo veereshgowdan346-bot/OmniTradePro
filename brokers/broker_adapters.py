@@ -76,7 +76,7 @@ class AngelOneAdapter:
                     "broker": "ANGEL_ONE",
                     "feed_token": feed_token,
                     "jwt_token": jwt_token,
-                    "api_key": "***REDACTED***",  # SECURITY: Masked for logging safety
+                    "api_key": api_key,
                     "client_id": cid,
                     "message": "Authenticated successfully via SmartConnect"
                 }
@@ -123,7 +123,7 @@ class AngelOneAdapter:
                         "broker": "ANGEL_ONE",
                         "feed_token": feed_token,
                         "jwt_token": jwt_token,
-                        "api_key": "***REDACTED***",  # SECURITY: Masked for logging safety
+                        "api_key": api_key,
                         "client_id": cid,
                         "message": "Authenticated successfully via Angel One REST Gateway"
                     }

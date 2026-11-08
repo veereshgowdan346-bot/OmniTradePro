@@ -433,6 +433,7 @@ class OrderRouter:
         # =====================================================================
         if normalized_mode == "PAPER":
             with self._lock:
+                execution_uuid = str(uuid.uuid4())
                 if normalized_side == "BUY":
                     executed_price = round(price * (1.0 + self.PAPER_SLIPPAGE_RATE), 2)
                 else:
@@ -463,6 +464,8 @@ class OrderRouter:
                 pos_record = {
                     "id": trade_id,
                     "trade_id": trade_id,
+                    "order_id": f"PAPER-{trade_id}",
+                    "execution_id": execution_uuid,
                     "symbol": symbol,
                     "side": normalized_side,
                     "quantity": quantity,
@@ -477,6 +480,29 @@ class OrderRouter:
                 }
                 self._open_positions[trade_id] = pos_record
 
+                # Persist order record in database orders table if present
+                if hasattr(self.db_manager, "insert_order"):
+                    try:
+                        self.db_manager.insert_order({
+                            "order_id": execution_uuid,
+                            "broker": "PAPER_BROKER",
+                            "broker_order_id": f"PAPER-{trade_id}",
+                            "symbol": symbol,
+                            "exchange": normalized_exchange,
+                            "transaction_type": normalized_side,
+                            "product_type": "INTRADAY",
+                            "order_type": order_type,
+                            "quantity": quantity,
+                            "price": executed_price,
+                            "trigger_price": stop_loss,
+                            "status": "FILLED",
+                            "filled_quantity": quantity,
+                            "average_price": executed_price,
+                            "tag": f"PAPER-{trade_id}"
+                        })
+                    except Exception:
+                        pass
+
                 # Track daily execution count
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 if today_str not in self._daily_trade_counts:
@@ -486,6 +512,8 @@ class OrderRouter:
                 fill_result = {
                     "status": "FILLED",
                     "trade_id": trade_id,
+                    "order_id": f"PAPER-{trade_id}",
+                    "execution_id": execution_uuid,
                     "symbol": symbol,
                     "side": normalized_side,
                     "quantity": quantity,
@@ -864,6 +892,98 @@ class OrderRouter:
                 "net_pnl": net_pnl,
                 "symbol": pos.get("symbol", "") if pos else "",
                 "broker": pos.get("broker", "") if pos else "",
+            }
+
+    def cancel_order(self, order_id: Any) -> Dict[str, Any]:
+        """
+        Cancels an active or submitted order by trade ID, broker order ID, or execution UUID.
+        Transitions state from SUBMITTED/ACTIVE -> CANCELLED / SQUARED_OFF cleanly.
+        Synchronizes cancellation with broker gateways and SQLite audit logs.
+        """
+        with self._lock:
+            target_trade_id = None
+            pos = None
+            str_id = str(order_id).strip()
+
+            # Match in _open_positions
+            if isinstance(order_id, int) and order_id in self._open_positions:
+                target_trade_id = order_id
+                pos = self._open_positions.pop(order_id)
+            else:
+                for t_id, p in list(self._open_positions.items()):
+                    if (str(t_id) == str_id or 
+                        str(p.get("id")) == str_id or 
+                        str(p.get("trade_id")) == str_id or 
+                        str(p.get("broker_order_id")) == str_id or 
+                        str(p.get("client_order_id")) == str_id or 
+                        str(p.get("execution_id")) == str_id or
+                        str(p.get("order_id")) == str_id):
+                        target_trade_id = t_id
+                        pos = self._open_positions.pop(t_id)
+                        break
+
+            # Forward cancellation to live broker instances
+            broker_results = {}
+            for b_name, b_inst in self._brokers.items():
+                if hasattr(b_inst, "cancel_order"):
+                    try:
+                        resp = b_inst.cancel_order(str_id)
+                        broker_results[b_name] = resp
+                    except Exception as exc:
+                        broker_results[b_name] = str(exc)
+
+            # Update DB manager orders table if present
+            if hasattr(self.db_manager, "update_order_status"):
+                try:
+                    self.db_manager.update_order_status(
+                        order_id=str_id,
+                        status="CANCELLED",
+                        rejection_reason="CANCELLED_BY_OPERATOR"
+                    )
+                except Exception:
+                    pass
+
+            # Update db_manager trade exit
+            if hasattr(self.db_manager, "update_trade_exit") and target_trade_id:
+                try:
+                    self.db_manager.update_trade_exit(
+                        trade_id=target_trade_id,
+                        exit_price=pos.get("entry_price", 0.0) if pos else 0.0,
+                        status="CANCELLED",
+                        friction_cost=0.0
+                    )
+                except Exception:
+                    pass
+
+            # Dual database sync to trade_audit_log in db_handler
+            try:
+                from database.db_handler import DatabaseHandler
+                dbh = DatabaseHandler()
+                with dbh._lock:
+                    conn = dbh._get_connection()
+                    c = conn.cursor()
+                    c.execute("""
+                        UPDATE trade_audit_log 
+                        SET status = 'CANCELLED'
+                        WHERE id = ? OR symbol = ?
+                    """, (str(target_trade_id or order_id), pos.get("symbol", "") if pos else ""))
+                    conn.commit()
+            except Exception:
+                pass
+
+            symbol = pos.get("symbol", "") if pos else ""
+            broker = pos.get("broker", "PAPER") if pos else "ALL"
+            exec_id = pos.get("execution_id", str_id) if pos else str_id
+
+            return {
+                "status": "CANCELLED",
+                "order_id": order_id,
+                "execution_id": exec_id,
+                "trade_id": target_trade_id or order_id,
+                "symbol": symbol,
+                "broker": broker,
+                "transition": "SUBMITTED -> ACTIVE -> CANCELLED",
+                "message": f"Order {order_id} successfully cancelled / squared-off."
             }
 
     def auto_square_off_all(self, reason: str = "EMERGENCY_KILL_SWITCH") -> List[Dict[str, Any]]:

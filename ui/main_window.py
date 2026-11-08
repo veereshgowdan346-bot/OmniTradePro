@@ -71,6 +71,10 @@ except ImportError:
             return self._current_index
         def count(self):
             return len(self._widgets)
+        def currentWidget(self):
+            return self._widgets[self._current_index] if 0 <= self._current_index < len(self._widgets) else None
+        def widget(self, i):
+            return self._widgets[i] if 0 <= i < len(self._widgets) else None
     class QMessageBox:
         @staticmethod
         def warning(p, t, m): pass
