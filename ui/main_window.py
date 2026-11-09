@@ -360,6 +360,9 @@ class MainWindow(QMainWindow):
                         rms = inst.get_rms_funds()
                         if rms.get("status"):
                             self.portfolio_card.update_rms_funds(rms, len(self.order_router.positions))
+                            net_cap = float(rms.get("net", 0.0) or 0.0)
+                            if hasattr(self, "top_bar") and hasattr(self.top_bar, "update_nav"):
+                                self.top_bar.update_nav(net_cap)
                     except Exception:
                         pass
                 threading.Thread(target=fetch_rms, daemon=True, name="RMSFundsFetcher").start()
@@ -376,6 +379,8 @@ class MainWindow(QMainWindow):
                     latency=None
                 )
                 self.portfolio_card.update_portfolio(0.0, 0.0, len(self.order_router.positions))
+                if hasattr(self, "top_bar") and hasattr(self.top_bar, "update_nav"):
+                    self.top_bar.update_nav(0.0)
 
     def _on_router_notification(self, title: str, message: str) -> None:
         """Surfaces non-blocking desktop warnings and execution alerts."""
@@ -415,11 +420,16 @@ class MainWindow(QMainWindow):
             unrealized = summary.get("unrealized_pnl", 0.0)
             self.live_pnl_card.update_pnl(realized, unrealized)
 
-            # 3. Real Open Positions from OrderRouter
+            # 3. Synchronize Top Bar Net Day P&L
+            net_pnl = realized + unrealized
+            if hasattr(self, "top_bar") and hasattr(self.top_bar, "update_net_pnl"):
+                self.top_bar.update_net_pnl(net_pnl)
+
+            # 4. Real Open Positions from OrderRouter
             open_pos_count = len(self.order_router.positions)
             self.portfolio_card.val_pos.setText(str(open_pos_count))
 
-            # 4. Real OS CPU & RAM Telemetry
+            # 5. Real OS CPU & RAM Telemetry
             is_conn = self.stream_worker.isRunning()
             active_broker = self.db.get_active_broker()
             b_name = active_broker.get("broker_name", "ANGEL_ONE") if active_broker else "DISCONNECTED"

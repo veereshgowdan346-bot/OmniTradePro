@@ -10,19 +10,19 @@ cyan glow borders, and clean typography.
 class GlassmorphismTheme:
     """Institutional dark cyber glassmorphism color palette and style definitions."""
 
-    # Core Canvas & Background Tokens
-    BG_CANVAS = "#060b13"
-    BG_SIDEBAR = "#070d18"
-    BG_CARD = "#0d1726"
-    BG_CARD_TRANSLUCENT = "rgba(13, 23, 38, 0.92)"
-    BG_SUB_CARD = "#0a121f"
-    BG_INPUT = "#09101b"
+    # Core Canvas & Background Tokens (Deep Obsidian & Slate)
+    BG_CANVAS = "#0b0e14"
+    BG_SIDEBAR = "#0c1017"
+    BG_CARD = "#121824"
+    BG_CARD_TRANSLUCENT = "rgba(18, 24, 36, 0.94)"
+    BG_SUB_CARD = "#0d131d"
+    BG_INPUT = "#0e1420"
 
-    # Border Tokens
-    BORDER_CARD = "1px solid #16243a"
-    BORDER_CARD_HIGHLIGHT = "1px solid rgba(0, 242, 254, 0.18)"
+    # Border Tokens (Refined 1px Glassmorphism Borders)
+    BORDER_CARD = "1px solid rgba(255, 255, 255, 0.06)"
+    BORDER_CARD_HIGHLIGHT = "1px solid #00e5ff"
     BORDER_CARD_GREEN = "1px solid rgba(0, 230, 118, 0.25)"
-    BORDER_INPUT = "1px solid #1c2e48"
+    BORDER_INPUT = "1px solid rgba(255, 255, 255, 0.08)"
 
     # Quantitative Semantic Accents
     NEON_GREEN = "#00e676"
@@ -37,9 +37,9 @@ class GlassmorphismTheme:
 
     # Typography Palette
     TEXT_WHITE = "#ffffff"
-    TEXT_PRIMARY = "#e0e6ed"
-    TEXT_MUTED = "#78909c"
-    TEXT_SUBTLE = "#455a64"
+    TEXT_PRIMARY = "#f8fafc"
+    TEXT_MUTED = "#94a3b8"
+    TEXT_SUBTLE = "#64748b"
 
     @classmethod
     def get_stylesheet(cls) -> str:
@@ -71,8 +71,8 @@ class GlassmorphismTheme:
         /* Translucent Cyber Cards */
         QFrame.cyberCard {{
             background-color: {cls.BG_CARD};
-            border: 1px solid #17263c;
-            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
         }}
 
         QFrame.cyberCard:hover {{
@@ -81,7 +81,7 @@ class GlassmorphismTheme:
 
         QFrame.subCard {{
             background-color: {cls.BG_SUB_CARD};
-            border: 1px solid #142234;
+            border: 1px solid rgba(255, 255, 255, 0.04);
             border-radius: 6px;
         }}
 

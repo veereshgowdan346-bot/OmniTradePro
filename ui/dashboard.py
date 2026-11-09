@@ -95,6 +95,12 @@ except ImportError:
         def __init__(self, parent=None): pass
         def addItems(self, items): pass
         def currentText(self): return ""
+        def setStyleSheet(self, s): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setFixedSize(self, w, h): pass
+        def setCurrentIndex(self, i): pass
+        def clear(self): pass
     class QProgressBar:
         def __init__(self, parent=None): pass
         def setValue(self, v): pass
@@ -108,6 +114,7 @@ except ImportError:
         def setRowCount(self, r): pass
         def setItem(self, r, c, item): pass
         def setCellWidget(self, r, c, w): pass
+        def setStyleSheet(self, s): pass
     class QTableWidgetItem:
         def __init__(self, text=""): pass
     class QHeaderView:
@@ -179,8 +186,8 @@ def get_real_os_cpu() -> float:
 
 class HeaderTopBar(QFrame):
     """
-    Top Bar: Brand avatar, Title & Subtitle, 4 Index Tickers, Bell, Settings,
-    Language toggle, and Emergency Kill Switch.
+    Top Bar: Brand avatar, Title & Subtitle, 4 Index Tickers, Portfolio NAV, Day P&L Badge,
+    Bell, Settings, Language toggle, and Emergency Kill Switch.
     """
     kill_switch_triggered = Signal()
 
@@ -188,8 +195,8 @@ class HeaderTopBar(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #070d18;
-                border-bottom: 1px solid #142236;
+                background-color: #0b0e14;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
             }
         """)
         self._init_ui()
@@ -203,13 +210,13 @@ class HeaderTopBar(QFrame):
         self.avatar_lbl = QLabel("⚡", self)
         self.avatar_lbl.setStyleSheet("""
             QLabel {
-                background-color: rgba(0, 240, 255, 0.12);
-                border: 1.5px solid #00f0ff;
+                background-color: rgba(0, 229, 255, 0.12);
+                border: 1.5px solid #00e5ff;
                 border-radius: 8px;
-                color: #00f0ff;
-                font-size: 20px;
+                color: #00e5ff;
+                font-size: 18px;
                 font-weight: 900;
-                padding: 3px 9px;
+                padding: 2px 8px;
             }
         """)
         layout.addWidget(self.avatar_lbl)
@@ -217,11 +224,11 @@ class HeaderTopBar(QFrame):
         # Brand Title & Subtitle
         brand_box = QVBoxLayout()
         brand_box.setSpacing(1)
-        title_lbl = QLabel("OmniTradePro <span style='color:#00f0ff; font-weight:800;'>v5.0</span>", self)
-        title_lbl.setStyleSheet("color: #ffffff; font-size: 15px; font-weight: 800; letter-spacing: 0.5px;")
+        title_lbl = QLabel("OmniTradePro <span style='color:#00e5ff; font-weight:800;'>v5.0</span>", self)
+        title_lbl.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; font-family: 'Segoe UI', Inter, sans-serif;")
 
         sub_lbl = QLabel("Institutional Multi-Broker Algorithmic Execution Platform", self)
-        sub_lbl.setStyleSheet("color: #78909c; font-size: 10px; font-weight: 500;")
+        sub_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 500;")
 
         brand_box.addWidget(title_lbl)
         brand_box.addWidget(sub_lbl)
@@ -237,10 +244,10 @@ class HeaderTopBar(QFrame):
             t_card = QFrame(self)
             t_card.setStyleSheet("""
                 QFrame {
-                    background-color: #0d1726;
-                    border: 1px solid #16263c;
-                    border-radius: 8px;
-                    padding: 2px 10px;
+                    background-color: #121824;
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 6px;
+                    padding: 2px 8px;
                 }
             """)
             t_layout = QVBoxLayout(t_card)
@@ -248,15 +255,58 @@ class HeaderTopBar(QFrame):
             t_layout.setSpacing(1)
 
             t_name = QLabel(name, t_card)
-            t_name.setStyleSheet("color: #78909c; font-size: 10px; font-weight: 700;")
+            t_name.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; font-family: 'Segoe UI', sans-serif;")
 
-            t_val = QLabel("<span style='color:#78909c;'>Standby</span>", t_card)
-            t_val.setStyleSheet("color: #90a4ae; font-size: 11px; font-weight: 700;")
+            t_val = QLabel("<span style='color:#64748b;'>Standby</span>", t_card)
+            t_val.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;")
 
             t_layout.addWidget(t_name)
             t_layout.addWidget(t_val)
             layout.addWidget(t_card)
             self.ticker_widgets[name] = t_val
+
+        layout.addSpacing(8)
+
+        # Portfolio NAV & Net P&L Summary Cards
+        self.nav_card = QFrame(self)
+        self.nav_card.setStyleSheet("""
+            QFrame {
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 2px 10px;
+            }
+        """)
+        nav_l = QVBoxLayout(self.nav_card)
+        nav_l.setContentsMargins(6, 3, 6, 3)
+        nav_l.setSpacing(1)
+        lbl_nav_t = QLabel("PORTFOLIO NAV", self.nav_card)
+        lbl_nav_t.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; font-family: 'Segoe UI', sans-serif;")
+        self.lbl_nav_v = QLabel("₹0.00", self.nav_card)
+        self.lbl_nav_v.setStyleSheet("color: #f8fafc; font-size: 11px; font-weight: 800; font-family: 'Consolas', monospace;")
+        nav_l.addWidget(lbl_nav_t)
+        nav_l.addWidget(self.lbl_nav_v)
+        layout.addWidget(self.nav_card)
+
+        self.pnl_card = QFrame(self)
+        self.pnl_card.setStyleSheet("""
+            QFrame {
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 2px 10px;
+            }
+        """)
+        pnl_l = QVBoxLayout(self.pnl_card)
+        pnl_l.setContentsMargins(6, 3, 6, 3)
+        pnl_l.setSpacing(1)
+        lbl_pnl_t = QLabel("NET DAY P&L", self.pnl_card)
+        lbl_pnl_t.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; font-family: 'Segoe UI', sans-serif;")
+        self.lbl_pnl_v = QLabel("₹0.00", self.pnl_card)
+        self.lbl_pnl_v.setStyleSheet("color: #10b981; font-size: 11px; font-weight: 800; font-family: 'Consolas', monospace;")
+        pnl_l.addWidget(lbl_pnl_t)
+        pnl_l.addWidget(self.lbl_pnl_v)
+        layout.addWidget(self.pnl_card)
 
         layout.addStretch()
 
@@ -264,15 +314,15 @@ class HeaderTopBar(QFrame):
         self.btn_bell = QPushButton("🔔", self)
         self.btn_bell.setStyleSheet("""
             QPushButton {
-                background-color: #0d1726;
-                border: 1px solid #1a2a40;
-                border-radius: 8px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
                 color: #ffffff;
-                font-size: 14px;
+                font-size: 13px;
                 padding: 6px 10px;
             }
             QPushButton:hover {
-                border: 1px solid #00e676;
+                border: 1px solid #00e5ff;
             }
         """)
         layout.addWidget(self.btn_bell)
@@ -281,15 +331,16 @@ class HeaderTopBar(QFrame):
         self.btn_settings = QPushButton("⚙", self)
         self.btn_settings.setStyleSheet("""
             QPushButton {
-                background-color: #0d1726;
-                border: 1px solid #1a2a40;
-                border-radius: 8px;
-                color: #cfd8dc;
-                font-size: 14px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                color: #94a3b8;
+                font-size: 13px;
                 padding: 6px 10px;
             }
             QPushButton:hover {
-                border: 1px solid #00e676;
+                border: 1px solid #00e5ff;
+                color: #ffffff;
             }
         """)
         layout.addWidget(self.btn_settings)
@@ -298,10 +349,10 @@ class HeaderTopBar(QFrame):
         self.btn_lang = QPushButton("ಕನ್ನಡ | EN", self)
         self.btn_lang.setStyleSheet("""
             QPushButton {
-                background-color: #0d1726;
-                border: 1px solid #1a2a40;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
                 border-radius: 6px;
-                color: #b0bec5;
+                color: #94a3b8;
                 font-size: 11px;
                 font-weight: 600;
                 padding: 5px 10px;
@@ -313,17 +364,17 @@ class HeaderTopBar(QFrame):
         self.btn_kill = QPushButton("  Emergency\n  Kill Switch", self)
         self.btn_kill.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255, 23, 68, 0.16);
-                border: 1.5px solid #ff1744;
-                border-radius: 8px;
-                color: #ff5252;
+                background-color: rgba(239, 68, 68, 0.15);
+                border: 1.5px solid #ef4444;
+                border-radius: 6px;
+                color: #ef4444;
                 font-size: 11px;
                 font-weight: 800;
                 padding: 4px 12px;
                 text-align: center;
             }
             QPushButton:hover {
-                background-color: rgba(255, 23, 68, 0.35);
+                background-color: rgba(239, 68, 68, 0.35);
                 color: #ffffff;
             }
         """)
@@ -332,6 +383,17 @@ class HeaderTopBar(QFrame):
         except Exception:
             pass
         layout.addWidget(self.btn_kill)
+
+    def update_nav(self, nav: float) -> None:
+        """Updates portfolio NAV readout."""
+        self.lbl_nav_v.setText(f"₹{nav:,.2f}")
+
+    def update_net_pnl(self, pnl: float) -> None:
+        """Updates Net Day P&L badge with dynamic color coding."""
+        col = "#10b981" if pnl >= 0 else "#ef4444"
+        sign = "+" if pnl >= 0 else ""
+        self.lbl_pnl_v.setText(f"{sign}₹{pnl:,.2f}")
+        self.lbl_pnl_v.setStyleSheet(f"color: {col}; font-size: 11px; font-weight: 800; font-family: 'Consolas', monospace;")
 
     def update_ticker(self, name: str, price: float, chg_pct: float = 0.0) -> None:
         """Updates ticker card with genuine exchange numbers."""
@@ -342,7 +404,7 @@ class HeaderTopBar(QFrame):
                 target_key = key
                 break
         if target_key:
-            col = "#00e676" if chg_pct >= 0 else "#ff1744"
+            col = "#10b981" if chg_pct >= 0 else "#ef4444"
             sign = "+" if chg_pct >= 0 else ""
             arrow = "▲" if chg_pct >= 0 else "▼"
             self.ticker_widgets[target_key].setText(
@@ -375,17 +437,18 @@ class SubHeaderNavBar(QWidget):
             btn = QPushButton(title, self)
             btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #0d1726;
-                    color: #cfd8dc;
+                    background-color: #121824;
+                    color: #94a3b8;
                     font-weight: 600;
-                    font-size: 12px;
-                    border-radius: 6px;
-                    padding: 6px 16px;
-                    border: 1px solid #18283e;
+                    font-size: 11px;
+                    border-radius: 5px;
+                    padding: 5px 14px;
+                    border: 1px solid rgba(255, 255, 255, 0.06);
                 }
                 QPushButton:hover {
-                    background-color: #142236;
-                    color: #ffffff;
+                    background-color: #1a2332;
+                    color: #00e5ff;
+                    border: 1px solid #00e5ff;
                 }
             """)
             try:
@@ -423,11 +486,11 @@ class LeftSidebar(QFrame):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(160)
+        self.setFixedWidth(162)
         self.setStyleSheet("""
             QFrame {
-                background-color: #070d18;
-                border-right: 1px solid #142236;
+                background-color: #0c1017;
+                border-right: 1px solid rgba(255, 255, 255, 0.06);
             }
         """)
         self.buttons: List[QPushButton] = []
@@ -436,7 +499,7 @@ class LeftSidebar(QFrame):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 8)
+        layout.setContentsMargins(6, 8, 6, 8)
         layout.setSpacing(3)
 
         for idx, text in enumerate(self.NAV_ITEMS):
@@ -466,9 +529,9 @@ class LeftSidebar(QFrame):
         brand_card = QFrame(self)
         brand_card.setStyleSheet("""
             QFrame {
-                background-color: #0b1424;
-                border: 1px solid #142236;
-                border-radius: 8px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
                 padding: 6px;
             }
         """)
@@ -477,8 +540,8 @@ class LeftSidebar(QFrame):
         bc_layout.setSpacing(2)
         lbl_v = QLabel("⚡ OmniTradePro", brand_card)
         lbl_v.setAlignment(Qt.AlignCenter)
-        lbl_v.setStyleSheet("color: #00f0ff; font-size: 10px; font-weight: 800;")
-        lbl_sub = QLabel("Institutional v5.0", brand_card)
+        lbl_v.setStyleSheet("color: #00e5ff; font-size: 10px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
+        lbl_sub = QLabel("Hedge Terminal v5.0", brand_card)
         lbl_sub.setAlignment(Qt.AlignCenter)
         lbl_sub.setStyleSheet("color: #64748b; font-size: 9px;")
         bc_layout.addWidget(lbl_v)
@@ -494,13 +557,13 @@ class LeftSidebar(QFrame):
         status_pill.setAlignment(Qt.AlignCenter)
         status_pill.setStyleSheet("""
             QLabel {
-                background-color: rgba(0, 230, 118, 0.12);
-                border: 1.5px solid #00e676;
-                border-radius: 11px;
-                color: #00e676;
+                background-color: rgba(16, 185, 129, 0.12);
+                border: 1px solid #10b981;
+                border-radius: 10px;
+                color: #10b981;
                 font-weight: 800;
-                font-size: 11px;
-                padding: 4px 6px;
+                font-size: 10px;
+                padding: 3px 6px;
             }
         """)
         layout.addWidget(status_pill)
@@ -519,30 +582,30 @@ class LeftSidebar(QFrame):
             if idx == self.active_index:
                 btn.setStyleSheet("""
                     QPushButton {
-                        background-color: #00e676;
-                        color: #060b13;
+                        background-color: rgba(0, 229, 255, 0.14);
+                        color: #00e5ff;
                         font-weight: 800;
                         font-size: 11px;
-                        border-radius: 6px;
+                        border-radius: 5px;
                         padding: 7px 10px;
                         text-align: left;
-                        border: none;
+                        border: 1px solid #00e5ff;
                     }
                 """)
             else:
                 btn.setStyleSheet("""
                     QPushButton {
                         background-color: transparent;
-                        color: #90a4ae;
+                        color: #94a3b8;
                         font-weight: 600;
                         font-size: 11px;
-                        border-radius: 6px;
+                        border-radius: 5px;
                         padding: 6px 10px;
                         text-align: left;
-                        border: none;
+                        border: 1px solid transparent;
                     }
                     QPushButton:hover {
-                        background-color: rgba(255, 255, 255, 0.06);
+                        background-color: rgba(255, 255, 255, 0.05);
                         color: #ffffff;
                     }
                 """)
@@ -551,7 +614,8 @@ class LeftSidebar(QFrame):
 class QuickTradeCard(QFrame):
     """
     Top-right Quick Trade Card:
-    Auto Trade toggle, BUY / SELL selectors, Symbol, Qty, Type, Product, and Place Order button.
+    Institutional order execution ticket with BUY / SELL switches, dynamic lot sizing,
+    order types, product codes, and high-performance dispatch.
     """
     order_requested = Signal(dict)
 
@@ -559,9 +623,9 @@ class QuickTradeCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self.active_side = "BUY"
@@ -569,27 +633,27 @@ class QuickTradeCard(QFrame):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
 
-        # Header: '⚡ Quick Trade' | Auto Trade toggle
+        # Header: '⚡ ORDER TICKET' | Auto Trade toggle
         hdr_layout = QHBoxLayout()
-        title_lbl = QLabel("⚡ Quick Trade", self)
-        title_lbl.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 13px;")
+        title_lbl = QLabel("⚡ ORDER TICKET", self)
+        title_lbl.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 12px; font-family: 'Segoe UI', Inter, sans-serif; letter-spacing: 0.5px;")
 
-        auto_lbl = QLabel("Auto Trade", self)
-        auto_lbl.setStyleSheet("color: #78909c; font-size: 11px; font-weight: 600;")
+        auto_lbl = QLabel("Auto Pilot", self)
+        auto_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 600;")
 
         self.btn_auto = QPushButton("OFF ⚪", self)
         self.btn_auto.setStyleSheet("""
             QPushButton {
-                background-color: #1a2a40;
-                color: #cfd8dc;
+                background-color: #1a2332;
+                color: #94a3b8;
                 font-weight: 700;
-                border-radius: 10px;
+                border-radius: 9px;
                 padding: 2px 8px;
                 font-size: 10px;
-                border: none;
+                border: 1px solid rgba(255, 255, 255, 0.06);
             }
         """)
         try:
@@ -603,30 +667,31 @@ class QuickTradeCard(QFrame):
         hdr_layout.addWidget(self.btn_auto)
         layout.addLayout(hdr_layout)
 
-        # BUY / SELL buttons
+        # BUY / SELL Dual Mode Pills
         side_layout = QHBoxLayout()
-        self.btn_buy = QPushButton("BUY", self)
+        side_layout.setSpacing(6)
+        self.btn_buy = QPushButton("BUY / LONG", self)
+        self.btn_buy.setFixedHeight(30)
         self.btn_buy.setStyleSheet("""
             QPushButton {
-                background-color: #00e676;
-                color: #060b13;
+                background-color: #10b981;
+                color: #ffffff;
                 font-weight: 800;
-                font-size: 13px;
-                border-radius: 6px;
-                padding: 8px;
+                font-size: 12px;
+                border-radius: 5px;
                 border: none;
             }
         """)
-        self.btn_sell = QPushButton("SELL", self)
+        self.btn_sell = QPushButton("SELL / SHORT", self)
+        self.btn_sell.setFixedHeight(30)
         self.btn_sell.setStyleSheet("""
             QPushButton {
-                background-color: #142234;
-                color: #ffffff;
+                background-color: #1a2332;
+                color: #94a3b8;
                 font-weight: 700;
-                font-size: 13px;
-                border-radius: 6px;
-                padding: 8px;
-                border: 1px solid #1f334d;
+                font-size: 12px;
+                border-radius: 5px;
+                border: 1px solid rgba(255, 255, 255, 0.06);
             }
         """)
 
@@ -644,24 +709,38 @@ class QuickTradeCard(QFrame):
         grid = QGridLayout()
         grid.setSpacing(6)
 
-        grid.addWidget(QLabel("Symbol", self), 0, 0)
-        grid.addWidget(QLabel("Qty", self), 0, 1)
+        lbl_s = QLabel("Instrument", self)
+        lbl_s.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 600;")
+        lbl_q = QLabel("Quantity", self)
+        lbl_q.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 600;")
+        grid.addWidget(lbl_s, 0, 0)
+        grid.addWidget(lbl_q, 0, 1)
 
         self.combo_symbol = QComboBox(self)
-        self.combo_symbol.addItems(["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE.NS"])
+        self.combo_symbol.addItems(["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE.NS", "MCX CRUDE OIL", "MCX GOLD"])
+        self.combo_symbol.setStyleSheet("background-color: #0e1420; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px 6px; color: #ffffff; font-size: 11px;")
+
         self.combo_qty = QComboBox(self)
-        self.combo_qty.addItems(["50", "25", "15", "100", "200"])
+        self.combo_qty.addItems(["50", "25", "15", "100", "200", "500"])
+        self.combo_qty.setStyleSheet("background-color: #0e1420; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px 6px; color: #ffffff; font-size: 11px; font-family: 'Consolas', monospace;")
 
         grid.addWidget(self.combo_symbol, 1, 0)
         grid.addWidget(self.combo_qty, 1, 1)
 
-        grid.addWidget(QLabel("Order Type", self), 2, 0)
-        grid.addWidget(QLabel("Product", self), 2, 1)
+        lbl_t = QLabel("Order Type", self)
+        lbl_t.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 600;")
+        lbl_p = QLabel("Product", self)
+        lbl_p.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 600;")
+        grid.addWidget(lbl_t, 2, 0)
+        grid.addWidget(lbl_p, 2, 1)
 
         self.combo_type = QComboBox(self)
         self.combo_type.addItems(["Market", "Limit", "SL", "SL-M"])
+        self.combo_type.setStyleSheet("background-color: #0e1420; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px 6px; color: #ffffff; font-size: 11px;")
+
         self.combo_prod = QComboBox(self)
         self.combo_prod.addItems(["MIS", "CNC", "NRML"])
+        self.combo_prod.setStyleSheet("background-color: #0e1420; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px 6px; color: #ffffff; font-size: 11px;")
 
         grid.addWidget(self.combo_type, 3, 0)
         grid.addWidget(self.combo_prod, 3, 1)
@@ -669,19 +748,23 @@ class QuickTradeCard(QFrame):
         layout.addLayout(grid)
 
         # Place Order Button
-        self.btn_order = QPushButton("▶ Place Order", self)
+        self.btn_order = QPushButton("⚡ TRANSMIT BUY ORDER", self)
+        self.btn_order.setFixedHeight(34)
         self.btn_order.setStyleSheet("""
             QPushButton {
-                background-color: #00e676;
-                color: #060b13;
+                background-color: #10b981;
+                color: #ffffff;
                 font-weight: 800;
-                font-size: 14px;
-                border-radius: 7px;
-                padding: 10px;
+                font-size: 12px;
+                border-radius: 5px;
                 border: none;
+                letter-spacing: 0.5px;
             }
             QPushButton:hover {
-                background-color: #00ff88;
+                background-color: #059669;
+            }
+            QPushButton:pressed {
+                background-color: #047857;
             }
         """)
         try:
@@ -693,19 +776,33 @@ class QuickTradeCard(QFrame):
     def _toggle_auto(self) -> None:
         if "OFF" in self.btn_auto.text():
             self.btn_auto.setText("ON 🟢")
-            self.btn_auto.setStyleSheet("background-color: #00e676; color: #060b13; font-weight: 800; border-radius: 10px; padding: 2px 8px; font-size: 10px; border: none;")
+            self.btn_auto.setStyleSheet("background-color: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; font-weight: 800; border-radius: 9px; padding: 2px 8px; font-size: 10px;")
         else:
             self.btn_auto.setText("OFF ⚪")
-            self.btn_auto.setStyleSheet("background-color: #1a2a40; color: #cfd8dc; font-weight: 700; border-radius: 10px; padding: 2px 8px; font-size: 10px; border: none;")
+            self.btn_auto.setStyleSheet("background-color: #1a2332; color: #94a3b8; font-weight: 700; border-radius: 9px; padding: 2px 8px; font-size: 10px; border: 1px solid rgba(255, 255, 255, 0.06);")
 
     def _set_side(self, side: str) -> None:
         self.active_side = side
         if side == "BUY":
-            self.btn_buy.setStyleSheet("background-color: #00e676; color: #060b13; font-weight: 800; font-size: 13px; border-radius: 6px; padding: 8px; border: none;")
-            self.btn_sell.setStyleSheet("background-color: #142234; color: #ffffff; font-weight: 700; font-size: 13px; border-radius: 6px; padding: 8px; border: 1px solid #1f334d;")
+            self.btn_buy.setStyleSheet("background-color: #10b981; color: #ffffff; font-weight: 800; font-size: 12px; border-radius: 5px; border: none;")
+            self.btn_sell.setStyleSheet("background-color: #1a2332; color: #94a3b8; font-weight: 700; font-size: 12px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.06);")
+            self.btn_order.setText("⚡ TRANSMIT BUY ORDER")
+            self.btn_order.setStyleSheet("background-color: #10b981; color: #ffffff; font-weight: 800; font-size: 12px; border-radius: 5px; border: none;")
         else:
-            self.btn_sell.setStyleSheet("background-color: #ff1744; color: #ffffff; font-weight: 800; font-size: 13px; border-radius: 6px; padding: 8px; border: none;")
-            self.btn_buy.setStyleSheet("background-color: #142234; color: #ffffff; font-weight: 700; font-size: 13px; border-radius: 6px; padding: 8px; border: 1px solid #1f334d;")
+            self.btn_sell.setStyleSheet("background-color: #ef4444; color: #ffffff; font-weight: 800; font-size: 12px; border-radius: 5px; border: none;")
+            self.btn_buy.setStyleSheet("background-color: #1a2332; color: #94a3b8; font-weight: 700; font-size: 12px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.06);")
+            self.btn_order.setText("⚡ TRANSMIT SELL ORDER")
+            self.btn_order.setStyleSheet("background-color: #ef4444; color: #ffffff; font-weight: 800; font-size: 12px; border-radius: 5px; border: none;")
+
+    def _on_place_order(self) -> None:
+        order_dict = {
+            "symbol": self.combo_symbol.currentText(),
+            "side": self.active_side,
+            "quantity": int(self.combo_qty.currentText()),
+            "order_type": self.combo_type.currentText().upper(),
+            "product": self.combo_prod.currentText()
+        }
+        self.order_requested.emit(order_dict)
 
     def _on_place_order(self) -> None:
         order_dict = {
@@ -728,9 +825,9 @@ class ActiveBotsCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()
@@ -797,9 +894,9 @@ class PortfolioCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()
@@ -891,9 +988,9 @@ class LivePnLCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()
@@ -991,9 +1088,9 @@ class TodaySummaryCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()
@@ -1062,9 +1159,9 @@ class RiskManagerCard(QFrame):
         RiskManagerCard._all_instances.append(self)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._current_daily_limit: float = 100.0
@@ -1159,9 +1256,9 @@ class AISentimentGauge(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()
@@ -1302,9 +1399,9 @@ class SystemHealthCard(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0d1726;
-                border: 1px solid #16243a;
-                border-radius: 10px;
+                background-color: #121824;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
         """)
         self._init_ui()

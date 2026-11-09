@@ -85,6 +85,12 @@ except ImportError:
         def __init__(self, parent=None): pass
         def addItems(self, items): pass
         def currentText(self): return ""
+        def setStyleSheet(self, s): pass
+        def setFixedWidth(self, w): pass
+        def setFixedHeight(self, h): pass
+        def setFixedSize(self, w, h): pass
+        def setCurrentIndex(self, i): pass
+        def clear(self): pass
     class QSpinBox:
         def __init__(self, parent=None):
             self._val = 0
@@ -125,6 +131,7 @@ except ImportError:
         def setRowCount(self, r): pass
         def setItem(self, r, c, item): pass
         def setCellWidget(self, r, c, w): pass
+        def setStyleSheet(self, s): pass
     class QTableWidgetItem:
         def __init__(self, text=""): pass
     class QHeaderView:
@@ -168,23 +175,23 @@ class BasePageView(QScrollArea):
         self.setStyleSheet("background: transparent; border: none;")
 
         self.container = QWidget()
-        self.container.setStyleSheet("background-color: #060b13;")
+        self.container.setStyleSheet("background-color: #0b0e14;")
         self.layout_main = QVBoxLayout(self.container)
         self.layout_main.setContentsMargins(16, 14, 16, 16)
         self.layout_main.setSpacing(12)
 
         # Header Title Banner
         hdr_card = QFrame(self.container)
-        hdr_card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 8px; padding: 10px 14px;")
+        hdr_card.setStyleSheet("background-color: #121824; border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; padding: 10px 14px;")
         hl = QVBoxLayout(hdr_card)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(2)
 
         lbl_title = QLabel(title, hdr_card)
-        lbl_title.setStyleSheet("color: #00e676; font-size: 15px; font-weight: 800; letter-spacing: 0.5px;")
+        lbl_title.setStyleSheet("color: #00e5ff; font-size: 15px; font-weight: 800; letter-spacing: 0.5px; font-family: 'Segoe UI', Inter, sans-serif;")
 
         lbl_sub = QLabel(subtitle, hdr_card)
-        lbl_sub.setStyleSheet("color: #78909c; font-size: 11px;")
+        lbl_sub.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 500;")
 
         hl.addWidget(lbl_title)
         hl.addWidget(lbl_sub)
@@ -211,14 +218,35 @@ class LiveTradingView(BasePageView):
 
         # DOM & Ladder on Right (30%)
         dom_card = QFrame(self.container)
-        dom_card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 12px;")
+        dom_card.setStyleSheet("background-color: #121824; border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; padding: 12px;")
         dl = QVBoxLayout(dom_card)
         dl.setSpacing(8)
 
-        dl.addWidget(QLabel("DEPTH OF MARKET (L2)", dom_card))
+        lbl_dom = QLabel("DEPTH OF MARKET (L2)", dom_card)
+        lbl_dom.setStyleSheet("color: #f8fafc; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
+        dl.addWidget(lbl_dom)
 
         dom_table = QTableWidget(5, 4, dom_card)
         dom_table.setHorizontalHeaderLabels(["Bids", "Qty", "Asks", "Qty"])
+        dom_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #0b0e14;
+                border: 1px solid rgba(255, 255, 255, 0.04);
+                border-radius: 6px;
+                color: #e2e8f0;
+                gridline-color: rgba(255, 255, 255, 0.04);
+                font-family: 'Consolas', monospace;
+                font-size: 11px;
+            }
+            QHeaderView::section {
+                background-color: #162032;
+                color: #94a3b8;
+                font-size: 10px;
+                font-weight: 700;
+                border: none;
+                padding: 4px;
+            }
+        """)
         try:
             dom_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         except Exception:
@@ -238,10 +266,10 @@ class LiveTradingView(BasePageView):
         # Fast Execution Ladder
         ladder_layout = QHBoxLayout()
         btn_fb = QPushButton("FAST BUY (MARKET)", dom_card)
-        btn_fb.setStyleSheet("background-color: #00e676; color: #060b13; font-weight: 800; padding: 10px; border-radius: 6px; border: none;")
+        btn_fb.setStyleSheet("background-color: #10b981; color: #0b0e14; font-weight: 800; padding: 10px; border-radius: 6px; border: none; font-size: 11px;")
 
         btn_fs = QPushButton("FAST SELL (MARKET)", dom_card)
-        btn_fs.setStyleSheet("background-color: #ff1744; color: #ffffff; font-weight: 800; padding: 10px; border-radius: 6px; border: none;")
+        btn_fs.setStyleSheet("background-color: #ef4444; color: #ffffff; font-weight: 800; padding: 10px; border-radius: 6px; border: none; font-size: 11px;")
 
         ladder_layout.addWidget(btn_fb)
         ladder_layout.addWidget(btn_fs)
