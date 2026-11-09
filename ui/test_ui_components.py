@@ -6,13 +6,23 @@ Validates stylesheet compilation, dialog layouts, chart canvas initialization,
 order panel pre-trade risk checks, and main window signal wiring.
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Add project root to sys.path
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+# ------------------------------------------------------------------------------
+# TEST ISOLATION: run the entire suite against a throwaway data directory.
+# Previously this suite issued `DELETE FROM trade_audit_log` against the live
+# production ledger, destroying the operator's audit trail on every test run.
+# ------------------------------------------------------------------------------
+_isolated_data_dir = tempfile.mkdtemp(prefix="omnitrade_uitest_")
+os.environ["OMNITRADE_DATA_DIR"] = _isolated_data_dir
 
 from ui.styles import GlassmorphismTheme
 from ui.vault_dialog import BrokerVaultDialog
@@ -70,26 +80,23 @@ def run_tests() -> bool:
     print_banner()
     all_passed = True
 
-    # Initialize QApplication for PySide6 widgets
-    try:
-        from PySide6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication(sys.argv)
-    except Exception:
-        pass
+    # Initialize QApplication for PySide6 widgets.
+    # A missing display/Qt binding must fail the suite loudly: silently continuing
+    # in stub mode would report PASS without exercising a single real widget.
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
 
-    # Ensure clean database test audit state for Zero-Fake-Data verification
-    try:
-        from database.db_handler import DatabaseHandler
-        db_clean = DatabaseHandler()
-        with db_clean._lock:
-            conn = db_clean._get_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM trade_audit_log;")
-            conn.commit()
-    except Exception:
-        pass
+    # Verify the isolated ledger is genuinely empty (Zero-Fake-Data baseline)
+    from database.db_handler import DatabaseHandler
+    db_clean = DatabaseHandler()
+    assert Path(str(db_clean.db_path)).parent == Path(_isolated_data_dir), (
+        f"Test isolation breach: ledger at {db_clean.db_path} is outside the sandbox "
+        f"{_isolated_data_dir}"
+    )
+    _baseline_trades = len(db_clean.get_all_trades(limit=5))
+    assert _baseline_trades == 0, f"Fresh test ledger must be empty, found {_baseline_trades} rows"
 
     try:
         # =====================================================================
@@ -199,6 +206,32 @@ def run_tests() -> bool:
         assert win.risk_card is not None
         assert win.ai_sentiment_card is not None
         assert win.system_health_card is not None
+
+        # Rigid geometry contract: header strips must not be allowed to grow/clip.
+        # HeaderTopBar = 56px, SubHeaderNavBar = 36px (layout clipping guard).
+        assert win.top_bar.height() == 56 or win.top_bar.minimumHeight() == 56, (
+            f"HeaderTopBar height contract broken: {win.top_bar.height()}px (expected 56px)"
+        )
+        assert win.sub_navbar.height() == 36 or win.sub_navbar.minimumHeight() == 36, (
+            f"SubHeaderNavBar height contract broken: {win.sub_navbar.height()}px (expected 36px)"
+        )
+        assert win.top_bar.maximumHeight() == 56, "HeaderTopBar must be rigid at 56px"
+        assert win.sub_navbar.maximumHeight() == 36, "SubHeaderNavBar must be rigid at 36px"
+
+        # Every dashboard card must be layout-complete (parented + non-negative geometry)
+        _cards = [
+            ("QuickTradeCard", win.quick_trade), ("ActiveBotsCard", win.active_bots_card),
+            ("PortfolioCard", win.portfolio_card), ("LivePnLCard", win.live_pnl_card),
+            ("TodaySummaryCard", win.summary_card), ("RiskManagerCard", win.risk_card),
+            ("AISentimentGauge", win.ai_sentiment_card),
+            ("SystemHealthCard", win.system_health_card),
+        ]
+        for _name, _card in _cards:
+            assert _card is not None, f"{_name} missing from dashboard grid"
+            assert _card.parent() is not None, f"{_name} is not parented into the layout tree"
+            assert _card.width() >= 0 and _card.height() >= 0, f"{_name} has invalid geometry"
+        print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Dashboard grid certified: rigid HeaderTopBar 56px + SubHeaderNavBar 36px, "
+              f"{len(_cards)} cards parented with valid geometry")
 
         # =====================================================================
         # 8. Zero-Fake-Data Purge & Multi-Page QStackedWidget Routing Test
@@ -382,8 +415,9 @@ def run_tests() -> bool:
 
         print(f"  {ANSI.GREEN}[ PASS ]{ANSI.RESET} Dynamic Admin Risk Management Certified: Capital, Risk %, SL, Ruin Floor, and Two-Way Global Sync fully validated")
 
+        dimensions = 10
         print("\n" + "=" * 80)
-        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL 10 UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
+        print(f"{ANSI.BG_GREEN}{ANSI.WHITE}{ANSI.BOLD} PHASE 7 CERTIFIED: ALL {dimensions}/{dimensions} UI COMPONENT SUITE ASSERTIONS PASSED. {ANSI.RESET}\n")
         print(f"{ANSI.GREEN}Frosted glassmorphism theme, multi-broker vault, high-performance charting,")
         print(f"risk-gated order dispatch, and main window orchestrator are ready for production.{ANSI.RESET}\n")
 

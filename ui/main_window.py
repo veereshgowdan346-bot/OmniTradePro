@@ -105,6 +105,8 @@ from ui.broker_control_widget import BrokerControlWidget
 from database.db_handler import DatabaseHandler
 from core.risk_engine import RiskEngine
 from core.order_router import OrderRouter
+from core.risk_budget import RiskBudget
+from core.consensus import ConsensusEngine
 from brokers.stream_worker import BrokerStreamWorker
 
 
@@ -354,12 +356,15 @@ class MainWindow(QMainWindow):
             self.system_health_card.update_telemetry(
                 broker_connected=True,
                 broker_name=broker_name,
-                latency=38
+                latency=self.stream_worker.get_dispatch_latency_ms()
             )
             # Update top bar latency pill to live
             if hasattr(self.top_bar, "update_latency"):
                 try:
-                    self.top_bar.update_latency(latency_ms=38, connected=True)
+                    self.top_bar.update_latency(
+                        latency_ms=self.stream_worker.get_dispatch_latency_ms(),
+                        connected=True
+                    )
                 except Exception:
                     pass
             # Query authentic RMS funds from live broker
@@ -445,7 +450,7 @@ class MainWindow(QMainWindow):
             self.system_health_card.update_telemetry(
                 broker_connected=is_conn,
                 broker_name=b_name,
-                latency=38 if is_conn else None
+                latency=self.stream_worker.get_dispatch_latency_ms() if is_conn else None
             )
         except Exception:
             pass
@@ -469,15 +474,43 @@ class MainWindow(QMainWindow):
             f"Statutory friction & risk boundaries preserved."
         )
 
+    def _resolve_live_price(self, symbol: str) -> float:
+        """
+        Zero-Fake-Data price resolution: chart canvas tick, then real stream cache.
+        Returns 0.0 when no genuine exchange price is available — never a synthetic anchor.
+        """
+        try:
+            price = float(self.chart_widget.canvas.current_price or 0.0)
+        except Exception:
+            price = 0.0
+        if price > 0.0:
+            return price
+        try:
+            cached = BrokerStreamWorker.get_latest_tick(symbol)
+            if cached:
+                return float(cached.get("ltp") or 0.0)
+        except Exception:
+            pass
+        return 0.0
+
     def _on_quick_trade_order(self, order_data: dict) -> None:
         """Dispatches order through OrderRouter with pre-trade risk verification and broker toggle matrix."""
         sym = order_data.get("symbol", "NIFTY 50")
-        side = order_data.get("side", "BUY")
-        qty = order_data.get("quantity", 50)
-        price = self.chart_widget.canvas.current_price
+        side = str(order_data.get("side", "BUY")).strip().upper()
+        qty = int(order_data.get("quantity") or 0)
+        if qty <= 0:
+            qty = 1
 
+        price = self._resolve_live_price(sym)
         if price <= 0.0:
-            price = 24857.30  # Default anchor reference if stream unprimed
+            # Zero-Fake-Data mandate: refuse to fabricate an execution price.
+            QMessageBox.warning(
+                self,
+                "No Live Market Price",
+                f"Order rejected: no genuine exchange price is available for {sym}.\n"
+                f"Connect a broker data stream (or wait for the first tick) before transmitting."
+            )
+            return
 
         if self.risk_engine.is_halted:
             QMessageBox.warning(self, "Risk Halt", f"Order rejected: {self.risk_engine.halt_reason}")
@@ -487,12 +520,55 @@ class MainWindow(QMainWindow):
         enabled_toggles = [b for b, toggled in self.order_router.get_all_toggles().items() if toggled]
         target_mode = "LIVE" if enabled_toggles else "PAPER"
 
+        # Size the ticket against the operator's capital ceiling FIRST, then derive the
+        # protective bracket from the quantity that will actually be filled. Deriving
+        # the bracket from the pre-clamp quantity produces a stop that is too tight
+        # after sizing, which silently fails the ₹70 gross hurdle gate downstream.
+        effective_capital = RiskBudget.calculate_effective_capital(
+            mode=target_mode,
+            user_allocated_capital=self.order_router.user_trade_capital
+        )
+        max_qty = RiskBudget.calculate_uniform_lot_size(
+            entry_price=price, effective_capital=effective_capital, leverage=5.0
+        )
+        if max_qty < 1:
+            QMessageBox.warning(
+                self,
+                "Capital Limit",
+                f"Order rejected: {sym} @ ₹{price:,.2f} requires more margin than the "
+                f"allocated trade capital (₹{effective_capital:,.2f} at 5x leverage)."
+            )
+            return
+        qty = min(qty, max_qty)
+
+        # Budget the stop against the worst admissible fill (statutory 8 bps slippage
+        # guard), otherwise an adverse fill pushes realised risk past the max-SL cap.
+        worst_case_entry = round(
+            price * (1.0 + RiskBudget.MAX_SLIPPAGE_PCT) if side == "BUY"
+            else price * (1.0 - RiskBudget.MAX_SLIPPAGE_PCT),
+            2
+        )
+        stop_loss = RiskBudget.derive_bracket_stop_loss(
+            entry_price=worst_case_entry,
+            side=side,
+            quantity=qty,
+            user_max_sl=self.order_router.user_max_sl
+        )
+        risk_distance = abs(price - stop_loss)
+        target_price = round(
+            price + (ConsensusEngine.DEFAULT_RR_MULTIPLIER * risk_distance) if side == "BUY"
+            else price - (ConsensusEngine.DEFAULT_RR_MULTIPLIER * risk_distance),
+            2
+        )
+
         res = self.order_router.execute_order(
             symbol=sym,
             exchange="NSE",
             side=side,
             quantity=qty,
             price=price,
+            stop_loss=stop_loss,
+            target_price=target_price,
             order_type="MARKET",
             product="MIS",
             mode=target_mode
@@ -503,12 +579,19 @@ class MainWindow(QMainWindow):
         if res.get("status") in ("FILLED", "SUBMITTED", "OPEN"):
             b_info = res.get("broker") or ", ".join(res.get("dispatched_brokers", [])) or "PAPER"
             order_id = res.get("order_id") or res.get("trade_id")
+            # Report the FILLED economics (the router clamps size and derives the
+            # bracket stop), never the requested ticket values.
+            filled_qty = int(res.get("quantity", qty))
+            fill_price = float(res.get("executed_price", price))
+            filled_sl = float(res.get("stop_loss", stop_loss))
+            filled_tgt = float(res.get("target_price", target_price))
             QMessageBox.information(
                 self,
                 "Order Executed",
                 f"Order {order_id} successfully executed!\n"
                 f"Mode: {target_mode} | Gateway: {b_info}\n"
-                f"Side: {side} | Qty: {qty} | Price: ₹{price:,.2f}\n"
+                f"Side: {side} | Qty: {filled_qty} | Price: ₹{fill_price:,.2f}\n"
+                f"Bracket SL: ₹{filled_sl:,.2f} | Target: ₹{filled_tgt:,.2f}\n"
                 f"Statutory Friction Buffer: ₹60.00 Applied."
             )
         elif res.get("status") == "REJECTED":
@@ -532,12 +615,12 @@ class MainWindow(QMainWindow):
         self.system_health_card.update_telemetry(
             broker_connected=is_conn,
             broker_name=self.stream_worker.broker_name,
-            latency=38 if is_conn else None
+            latency=self.stream_worker.get_dispatch_latency_ms() if is_conn else None
         )
         # Update top bar latency pill
         if hasattr(self.top_bar, "update_latency"):
             try:
-                self.top_bar.update_latency(latency_ms=38 if is_conn else None, connected=is_conn)
+                self.top_bar.update_latency(latency_ms=self.stream_worker.get_dispatch_latency_ms() if is_conn else None, connected=is_conn)
             except Exception:
                 pass
         # Zero-Fake-Data guarantee: clear seed candles when broker disconnects

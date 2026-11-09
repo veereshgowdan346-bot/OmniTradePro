@@ -855,16 +855,6 @@ class QuickTradeCard(QFrame):
         }
         self.order_requested.emit(order_dict)
 
-    def _on_place_order(self) -> None:
-        order_dict = {
-            "symbol": self.combo_symbol.currentText(),
-            "side": self.active_side,
-            "quantity": int(self.combo_qty.currentText()),
-            "order_type": self.combo_type.currentText().upper(),
-            "product": self.combo_prod.currentText()
-        }
-        self.order_requested.emit(order_dict)
-
 
 class ActiveBotsCard(QFrame):
     """
@@ -1506,7 +1496,8 @@ class SystemHealthCard(QFrame):
         if broker_connected:
             self.val_broker.setText(f"{broker_name} (Connected)")
             self.val_broker.setStyleSheet("color: #00e676; font-weight: 800; font-size: 11px;")
-            self.val_latency.setText(f"{latency or 42} ms")
+            # Zero-Fake-Data: never invent a latency figure; show measured value or gap
+            self.val_latency.setText(f"{latency} ms" if latency is not None else "-- ms")
             self.val_latency.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 11px;")
         else:
             self.val_broker.setText("DISCONNECTED")

@@ -13,6 +13,7 @@ High-performance TradingView-grade canvas:
 """
 
 import math
+import os
 import random
 from typing import Optional, List, Dict, Any
 import numpy as np
@@ -914,12 +915,16 @@ class ChartWidget(QFrame):
         except Exception:
             pass
 
-        # Seed the canvas with realistic historical candles immediately
-        try:
-            self.canvas.seed_historical(self.current_symbol)
-            self.restore_default_ohlc()
-        except Exception:
-            pass
+        # Zero-Fake-Data mandate: the canvas starts EMPTY and only ever displays
+        # exchange-sourced candles. Deterministic demo candles are opt-in for
+        # screenshots/design work and must be requested explicitly.
+        #   OMNITRADE_DEMO_CHART=1
+        if os.environ.get("OMNITRADE_DEMO_CHART", "0").strip() == "1":
+            try:
+                self.canvas.seed_historical(self.current_symbol)
+                self.restore_default_ohlc()
+            except Exception:
+                pass
 
     def _on_render_tick(self) -> None:
         """30 FPS render loop: only repaints when new tick data has arrived."""

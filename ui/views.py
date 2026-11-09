@@ -1280,7 +1280,20 @@ class ReportsView(BasePageView):
             self.table.setItem(r, 8, QTableWidgetItem(f"₹{float(t.get('net_pnl', 0.0)):,.2f}"))
 
 
-# Page 11: Unified SettingsView imported from ui.settings_view (backed by BrokerVaultWidget & VaultManager)
-from ui.settings_view import SettingsView
+# Page 11: Unified SettingsView lives in ui.settings_view (backed by BrokerVaultWidget & VaultManager).
+# It is re-exported lazily below (PEP 562) because ui.settings_view subclasses BasePageView
+# from this module: a module-level import here would create a genuine import cycle whose
+# success depended on which module the interpreter happened to import first.
+_SETTINGS_VIEW_EXPORTS = ("SettingsView",)
+
+
+def __getattr__(name: str):
+    """Lazily re-exports SettingsView, breaking the views <-> settings_view cycle."""
+    if name in _SETTINGS_VIEW_EXPORTS:
+        from ui.settings_view import SettingsView as _SettingsView
+
+        globals()["SettingsView"] = _SettingsView
+        return _SettingsView
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

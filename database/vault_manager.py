@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 import pyotp
 from cryptography.fernet import Fernet
 
+from database.paths import KEY_FILENAME, VAULT_FILENAME, resolve_path
+
 
 class VaultManager:
     """
@@ -46,17 +48,8 @@ class VaultManager:
 
     def _configure_paths(self, db_path: Optional[Any], key_path: Optional[Any]) -> None:
         """Sets up filesystem paths for the SQLite vault database and Fernet key file."""
-        base_dir = Path(__file__).resolve().parent
-
-        if db_path is None:
-            self.db_path = base_dir / "omnitrade_vault.db"
-        else:
-            self.db_path = Path(db_path)
-
-        if key_path is None:
-            self.key_path = base_dir / ".vault.key"
-        else:
-            self.key_path = Path(key_path)
+        self.db_path = resolve_path(db_path, VAULT_FILENAME)
+        self.key_path = resolve_path(key_path, KEY_FILENAME)
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.key_path.parent.mkdir(parents=True, exist_ok=True)

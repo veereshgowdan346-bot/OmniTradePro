@@ -233,6 +233,12 @@ class TestTradeNotifier(unittest.TestCase):
         mock_notifier = MagicMock()
         router = OrderRouter(vault_manager=self.vault, notifier=mock_notifier)
 
+        # Fund the ticket: the router enforces the operator ceiling by default now.
+        router.update_risk_parameters(
+            mode="PAPER", trade_capital=100_000.0, max_sl=500.0,
+            risk_percentage=5.0, daily_drawdown_pct=10.0, enforce=True
+        )
+
         # Trigger Paper Order
         paper_res = router.execute_order(
             symbol="INFY",

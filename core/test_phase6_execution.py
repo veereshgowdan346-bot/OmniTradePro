@@ -108,11 +108,15 @@ def run_tests() -> bool:
         # Setup A: Capital ₹500, Entry ₹100, SL ₹95 (Risk ₹5), Target ₹108 (Reward ₹8)
         # Max Risk = 500 * 0.10 = ₹50.0 -> Quantity = 50 / 5 = 10 shares
         # Gross Profit = 10 * 8 = ₹80.0 >= ₹70.0 hurdle! Net Profit = 80 - 60 = ₹20.0 >= ₹10.0!
+        # The 10% ceiling is asserted explicitly: calculate_position_size otherwise
+        # reads RiskBudget's process-global user risk percentage (default 5%), which
+        # makes this test order-dependent on whatever ran earlier in the process.
         budget_pass = RiskBudget.calculate_position_size(
             capital_inr=500.0,
             entry_price=100.0,
             stop_loss=95.0,
-            target_price=108.0
+            target_price=108.0,
+            risk_ratio=0.10
         )
         assert budget_pass["quantity"] == 10
         assert budget_pass["gross_profit_expected"] == 80.0
@@ -127,7 +131,8 @@ def run_tests() -> bool:
             capital_inr=500.0,
             entry_price=100.0,
             stop_loss=95.0,
-            target_price=105.0
+            target_price=105.0,
+            risk_ratio=0.10
         )
         assert budget_fail["gross_profit_expected"] == 50.0
         assert budget_fail["net_profit_expected"] == -10.0
@@ -145,6 +150,14 @@ def run_tests() -> bool:
         print(f"  {'-' * 76}")
 
         router = OrderRouter(db_handler=db)
+
+        # Fund the scenario explicitly: the router now enforces the operator's
+        # capital/risk ceiling by default, so a 10-share RELIANCE ticket must be
+        # backed by an account envelope rather than an implicit bypass.
+        router.update_risk_parameters(
+            mode="PAPER", trade_capital=100_000.0, max_sl=500.0,
+            risk_percentage=5.0, daily_drawdown_pct=10.0, enforce=True
+        )
 
         # 3A. Open Paper Position with 0.02% slippage
         # Price ₹2500 -> executed_price = 2500 * 1.0002 = 2500.50

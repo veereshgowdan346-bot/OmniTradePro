@@ -13,6 +13,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional, Dict, List
 
+from database.paths import LEDGER_FILENAME, resolve_path
+
 
 class DatabaseManager:
     """
@@ -32,13 +34,9 @@ class DatabaseManager:
     def __init__(self, db_path: Optional[str] = None) -> None:
         if self._initialized:
             return
-            
-        if db_path is None:
-            base_dir = Path(__file__).resolve().parent.parent
-            self.db_path = base_dir / "database" / "omnitrade.db"
-        else:
-            self.db_path = Path(db_path)
-            
+
+        self.db_path = resolve_path(db_path, LEDGER_FILENAME)
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._local = threading.local()

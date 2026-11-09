@@ -109,6 +109,10 @@ class BrokerStreamWorker(QThread):
             sym_clean = symbol.strip().upper()
             cls._global_ticks_cache[sym_clean] = dict(tick)
 
+    def get_dispatch_latency_ms(self) -> Optional[float]:
+        """Returns the measured ingest-to-UI dispatch latency in ms, or None if unmeasured."""
+        return self._last_dispatch_latency_ms
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.broker_name: str = ""
@@ -131,6 +135,9 @@ class BrokerStreamWorker(QThread):
         # High-performance decoupled tick queue
         self._tick_queue = queue.Queue(maxsize=10000)
         self._processor_thread: Optional[threading.Thread] = None
+
+        # Real ingest-to-UI dispatch latency telemetry (None until a tick is seen)
+        self._last_dispatch_latency_ms: Optional[float] = None
 
     def _heartbeat_supervisor_loop(self) -> None:
         """
@@ -159,6 +166,12 @@ class BrokerStreamWorker(QThread):
             try:
                 # Block for 500ms to allow responsive shutdown
                 tick = self._tick_queue.get(timeout=0.5)
+                # REAL latency telemetry: socket ingest -> Qt signal dispatch
+                ingest_ts = tick.pop("_ingest_ts", None)
+                if ingest_ts is not None:
+                    self._last_dispatch_latency_ms = round(
+                        (time.perf_counter() - ingest_ts) * 1000.0, 2
+                    )
                 self.tick_received.emit(tick)
                 self._tick_queue.task_done()
             except queue.Empty:
@@ -474,6 +487,7 @@ class BrokerStreamWorker(QThread):
                     self._latest_ticks[parsed["symbol"]] = parsed
                     BrokerStreamWorker.update_tick_cache(parsed["symbol"], parsed)
                     self._last_heartbeat_time = time.time()
+                    parsed["_ingest_ts"] = time.perf_counter()
                     try:
                         # Non-blocking enqueue with obsolete tick dropping
                         self._tick_queue.put_nowait(parsed)
@@ -553,6 +567,7 @@ class BrokerStreamWorker(QThread):
                 self._latest_ticks[parsed["symbol"]] = parsed
                 BrokerStreamWorker.update_tick_cache(parsed["symbol"], parsed)
                 self._last_heartbeat_time = time.time()
+                parsed["_ingest_ts"] = time.perf_counter()
                 try:
                     # Non-blocking enqueue with obsolete tick dropping
                     self._tick_queue.put_nowait(parsed)
