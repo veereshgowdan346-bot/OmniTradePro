@@ -184,12 +184,36 @@ def get_real_os_cpu() -> float:
     return 12.0
 
 
+class _ClickablePill(QFrame):
+    """Ticker card that publishes its instrument when clicked (top-bar sync)."""
+
+    def __init__(self, name: str, owner, parent=None) -> None:
+        super().__init__(parent)
+        self.instrument = name
+        self._owner = owner
+        try:
+            self.setCursor(Qt.PointingHandCursor)
+        except Exception:
+            pass
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        try:
+            self._owner.ticker_clicked.emit(self.instrument)
+        except Exception:
+            pass
+        try:
+            super().mousePressEvent(event)
+        except Exception:
+            pass
+
+
 class HeaderTopBar(QFrame):
     """
     Top Bar: Brand avatar, Title & Subtitle, 4 Index Tickers, Portfolio NAV, Day P&L Badge,
     Bell, Settings, Language toggle, and Emergency Kill Switch.
     """
     kill_switch_triggered = Signal()
+    ticker_clicked = Signal(str)   # instrument picked from an index pill
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -245,37 +269,54 @@ class HeaderTopBar(QFrame):
         # 2. Four Index Ticker Cards (Default Standby / Zero Fake State)
         self.ticker_widgets = {}
         self.ticker_deltas = {}   # index name -> point-delta + % badge QLabel
+        self.ticker_cards = {}    # index name -> clickable card
         tickers_data = ["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX"]
 
         for name in tickers_data:
-            t_card = QFrame(self)
+            t_card = _ClickablePill(name, self, self)
             t_card.setStyleSheet("""
                 QFrame {
                     background-color: #121824;
                     border: 1px solid rgba(255, 255, 255, 0.06);
                     border-radius: 6px;
-                    padding: 2px 8px;
+                    padding: 0px 6px;
+                }
+                QFrame:hover {
+                    border: 1px solid rgba(0, 229, 255, 0.45);
+                    background-color: #16202e;
                 }
             """)
             # Fixed width prevents price text changes from resizing ticker cards
             try:
                 t_card.setFixedWidth(104)
+                t_card.setFixedHeight(40)   # 56 px header − 2×8 px margins
             except Exception:
                 pass
             t_layout = QVBoxLayout(t_card)
-            t_layout.setContentsMargins(6, 3, 6, 3)
-            t_layout.setSpacing(1)
+            t_layout.setContentsMargins(5, 1, 5, 1)
+            t_layout.setSpacing(0)
 
+            # Three tight rows inside a 40 px card so nothing clips in the
+            # 56 px header: label 8px / price 10px / delta 7px.
             t_name = QLabel(name, t_card)
-            t_name.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; font-family: 'Segoe UI', sans-serif;")
+            t_name.setStyleSheet("color: #64748b; font-size: 8px; font-weight: 700; font-family: 'Segoe UI', sans-serif;")
 
             t_val = QLabel("<span style='color:#64748b;'>Standby</span>", t_card)
-            t_val.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;")
+            t_val.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 800; font-family: 'Consolas', monospace;")
 
             # Point-delta + % badge line. Starts as an em dash (unknown), never
             # as an invented number — Zero-Fake-Data.
             t_delta = QLabel("<span style='color:#475569;'>—</span>", t_card)
-            t_delta.setStyleSheet("color: #475569; font-size: 8px; font-weight: 700; font-family: 'Consolas', monospace;")
+            t_delta.setStyleSheet("color: #475569; font-size: 7px; font-weight: 700; font-family: 'Consolas', monospace;")
+
+            # Explicit row heights: guarantees the three rows fit the 40 px card
+            # so no glyph is ever clipped by the rigid 56 px header.
+            for _lbl, _h in ((t_name, 11), (t_val, 14), (t_delta, 10)):
+                try:
+                    _lbl.setFixedHeight(_h)
+                    _lbl.setFixedWidth(90)   # 104 px card − 2×6 px padding − border
+                except Exception:
+                    pass
 
             t_layout.addWidget(t_name)
             t_layout.addWidget(t_val)
@@ -283,6 +324,7 @@ class HeaderTopBar(QFrame):
             layout.addWidget(t_card)
             self.ticker_widgets[name] = t_val
             self.ticker_deltas[name] = t_delta
+            self.ticker_cards[name] = t_card
 
         layout.addSpacing(8)
 
@@ -667,6 +709,7 @@ class QuickTradeCard(QFrame):
 
         self.combo_symbol = QComboBox(self)
         self.combo_symbol.addItems(["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE.NS", "MCX CRUDE OIL", "MCX GOLD"])
+        self.combo_symbol.setEditable(True)   # any scanned/watchlist symbol can be typed in
         self.combo_symbol.setStyleSheet("background-color: #0e1420; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px 6px; color: #ffffff; font-size: 11px;")
 
         self.combo_qty = QComboBox(self)
@@ -695,6 +738,14 @@ class QuickTradeCard(QFrame):
         grid.addWidget(self.combo_prod, 3, 1)
 
         layout.addLayout(grid)
+
+        # Live LTP ticker for the ticket's instrument (real quotes only)
+        self.lbl_ltp = QLabel("LTP —", self)
+        self.lbl_ltp.setStyleSheet(
+            "color: #94a3b8; font-size: 10px; font-weight: 700; "
+            "font-family: 'Consolas', monospace;"
+        )
+        layout.addWidget(self.lbl_ltp)
 
         # Place Order Button
         self.btn_order = QPushButton("⚡ TRANSMIT BUY ORDER", self)
@@ -742,6 +793,88 @@ class QuickTradeCard(QFrame):
             self.btn_buy.setStyleSheet("background-color: #1a2332; color: #94a3b8; font-weight: 700; font-size: 12px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.06);")
             self.btn_order.setText("⚡ TRANSMIT SELL ORDER")
             self.btn_order.setStyleSheet("background-color: #ef4444; color: #ffffff; font-weight: 800; font-size: 12px; border-radius: 5px; border: none;")
+
+    def set_symbol(self, symbol: str, ltp: Optional[float] = None) -> None:
+        """
+        Prefills the ticket from an authoritative selection (top bar, watchlist,
+        scanner, or chart). Quantity is derived from the live price and the
+        admin's capital allocation — never a hardcoded lot table.
+        """
+        if not symbol:
+            return
+        sym = symbol.strip().upper()
+        try:
+            idx = self.combo_symbol.findText(sym, Qt.MatchFixedString)
+            if idx < 0:
+                idx = self.combo_symbol.findText(sym)
+            if idx >= 0:
+                self.combo_symbol.setCurrentIndex(idx)
+            else:
+                self.combo_symbol.setEditText(sym)
+        except Exception:
+            pass
+        if ltp:
+            self.update_ltp(ltp, symbol=sym)
+            self._sync_quantity(ltp)
+        else:
+            try:
+                self.lbl_ltp.setText(f"{sym} · LTP —")
+            except Exception:
+                pass
+
+    def update_ltp(self, ltp: float, symbol: Optional[str] = None) -> None:
+        """Renders a genuine quote in the ticket, coloured by day direction."""
+        try:
+            if not ltp or float(ltp) <= 0:
+                return
+            ltp = float(ltp)
+            prev = getattr(self, "_last_ltp", None)
+            self._last_ltp = ltp
+            color = "#94a3b8"
+            if prev is not None:
+                color = "#10b981" if ltp >= prev else "#ef4444"
+            sym = symbol or self.combo_symbol.currentText()
+            self.lbl_ltp.setText(f"{sym} · LTP ₹{ltp:,.2f}")
+            self.lbl_ltp.setStyleSheet(
+                f"color: {color}; font-size: 10px; font-weight: 800; "
+                f"font-family: 'Consolas', monospace;"
+            )
+        except Exception:
+            pass
+
+    def _sync_quantity(self, ltp: float) -> None:
+        """
+        Capital-aware quantity: floor(capital / price), clamped to the combo's
+        tradable range. Falls back to the current selection when capital is
+        unknown (₹0.00 boot state).
+        """
+        try:
+            capital = None
+            win = self.window()
+            holders = []
+            if win is not None:
+                holders.append(getattr(win, "quick_risk", None))
+                holders.append(getattr(getattr(win, "sidebar", None), "risk_controller", None))
+            for holder in holders:
+                alloc = getattr(holder, "spin_capital", None)
+                if alloc is not None:
+                    try:
+                        capital = float(alloc.value())
+                        break
+                    except Exception:
+                        capital = None
+            if not capital or capital <= 0 or ltp <= 0:
+                return
+            qty = int(capital // float(ltp))
+            if qty <= 0:
+                return
+            qty = min(qty, 500)
+            options = [self.combo_qty.itemText(i) for i in range(self.combo_qty.count())]
+            if str(qty) not in options:
+                self.combo_qty.addItem(str(qty))
+            self.combo_qty.setCurrentText(str(qty))
+        except Exception:
+            pass
 
     def _on_place_order(self) -> None:
         order_dict = {

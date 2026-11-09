@@ -825,6 +825,9 @@ class ChartWidget(QFrame):
     live OHLCV statistics header, and hardware-accelerated candle canvas.
     """
 
+    #: Emitted with the authenticated OHLCV frame of a completed real backfill.
+    backfill_loaded = Signal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.current_symbol: str = "RELIANCE.NS"
@@ -977,9 +980,15 @@ class ChartWidget(QFrame):
 
         layout.addLayout(sub_bar)
 
-        # 3. Candlestick Canvas
+        # 3. Candlestick Canvas — stretch=1 so the canvas always fills the card
+        #    (a fixed-size canvas leaves an empty band above it and looks broken).
         self.canvas = CandleCanvas(self)
-        layout.addWidget(self.canvas)
+        try:
+            self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.canvas.setMinimumHeight(320)
+        except Exception:
+            pass
+        layout.addWidget(self.canvas, 1)
 
         # 30 FPS render timer — decouples tick data from Qt paint events
         try:
@@ -1124,6 +1133,12 @@ class ChartWidget(QFrame):
         if seq != getattr(self, "_backfill_seq", 0):
             return
         if df is None or getattr(df, "empty", True):
+            # Keep any live candles that arrived while the fetch was in flight.
+            if not self.canvas.candles:
+                try:
+                    self.clear_canvas()
+                except Exception:
+                    pass
             self.restore_default_ohlc()
             return
         try:
@@ -1131,6 +1146,10 @@ class ChartWidget(QFrame):
         except Exception:
             return
         self.restore_default_ohlc()
+        try:
+            self.backfill_loaded.emit(df)   # engine/telemetry fan-out (real data)
+        except Exception:
+            pass
 
     def shutdown_backfill(self, timeout_ms: int = 2000) -> None:
         """Joins any in-flight provider thread (called on window teardown)."""
@@ -1148,10 +1167,13 @@ class ChartWidget(QFrame):
         """Provider/network failure: leave the canvas honestly empty."""
         if seq != getattr(self, "_backfill_seq", 0):
             return
-        try:
-            self.clear_canvas()
-        except Exception:
-            pass
+        # Never wipe live candles that already streamed in: a failed history
+        # fetch must not destroy real ticks.
+        if not self.canvas.candles:
+            try:
+                self.clear_canvas()
+            except Exception:
+                pass
         self.restore_default_ohlc()
 
     def set_symbol(self, symbol: str) -> None:

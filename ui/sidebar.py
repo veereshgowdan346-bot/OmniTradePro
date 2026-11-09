@@ -133,6 +133,8 @@ _BTN_INACTIVE = f"""
         padding: 0px 10px;
         text-align: left;
         height: 34px;
+        font-family: 'Segoe UI', 'Segoe UI Emoji', 'Noto Color Emoji',
+                     'Apple Color Emoji', 'Inter', sans-serif;
     }}
     QPushButton:hover {{
         background-color: {_BG_CARD};
@@ -345,8 +347,8 @@ class LeftSidebar(QFrame):
         # Ledger margin row
         margin_row = QHBoxLayout()
         margin_row.setSpacing(4)
-        margin_cap = QLabel("Available", footer)
-        margin_cap.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 8px;")
+        margin_cap = QLabel("LEDGER", footer)
+        margin_cap.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 8px; letter-spacing: 0.6px;")
         self.margin_lbl = QLabel("Margin: --", footer)
         self.margin_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 9px; font-weight: 700;")
         try:

@@ -1,10 +1,10 @@
 {
   "certified": true,
-  "generated": "2026-11-09T07:11:33.710049+00:00",
+  "generated": "2026-11-09T07:25:18.435052+00:00",
   "checks": [
     {
       "stage": "S1-STATIC",
-      "name": "AST parse of 56 modules (24,193 LOC)",
+      "name": "AST parse of 56 modules (24,763 LOC)",
       "status": "PASS",
       "detail": "zero SyntaxError",
       "severity": "blocker"
@@ -48,7 +48,7 @@
       "stage": "S2-PERSISTENCE",
       "name": "Audit-log timestamp precision (sub-millisecond)",
       "status": "PASS",
-      "detail": "ISO-8601 microsecond precision stored: 2026-11-09T07:11:18.985542+00:00",
+      "detail": "ISO-8601 microsecond precision stored: 2026-11-09T07:25:03.641845+00:00",
       "severity": "blocker"
     },
     {
@@ -193,7 +193,7 @@
     },
     {
       "stage": "S6-RUNTIME",
-      "name": "Boot time within budget (345 ms < 5000 ms)",
+      "name": "Boot time within budget (353 ms < 5000 ms)",
       "status": "PASS",
       "detail": "True",
       "severity": "blocker"
@@ -228,7 +228,7 @@
     },
     {
       "stage": "S6-RUNTIME",
-      "name": "Event loop survived 10.4s",
+      "name": "Event loop survived 10.2s",
       "status": "PASS",
       "detail": "True",
       "severity": "blocker"

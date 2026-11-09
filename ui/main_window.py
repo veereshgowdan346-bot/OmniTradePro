@@ -19,6 +19,7 @@ Page 11: SettingsView (Embedded AES-256 Broker Vault & dynamic 2FA configuration
 
 import threading
 from datetime import datetime, timezone
+import os
 from typing import Optional, Dict, Any
 
 try:
@@ -274,6 +275,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # The Live Trading View owns a second chart: same real-data provider, no
+        # synthetic seeding, same backfill pipeline.
+        try:
+            self.live_trading_view.chart.set_history_provider(self._fetch_history_backfill)
+        except Exception:
+            pass
+
         # Mount the 4-engine consensus matrix into the Strategies page (page 3)
         # so the "🧠 Strategy Consensus" tab lands on a real quorum/GBM meter —
         # previously StrategyConsensusView was defined but never instantiated.
@@ -327,6 +335,37 @@ class MainWindow(QMainWindow):
                         obj.symbol_selected.connect(self._on_symbol_sync)
                     except Exception:
                         pass
+
+            # 3b2. Top-bar index pills -> global instrument selection
+            if hasattr(self.top_bar, "ticker_clicked"):
+                try:
+                    self.top_bar.ticker_clicked.connect(self._on_pill_selected)
+                except Exception:
+                    pass
+
+            # 3b3. Live Trading View: symbol requests + fast-ladder dispatch
+            if hasattr(self.live_trading_view, "symbol_selected"):
+                try:
+                    self.live_trading_view.symbol_selected.connect(self._on_symbol_sync)
+                except Exception:
+                    pass
+            if hasattr(self.live_trading_view, "order_requested"):
+                try:
+                    self.live_trading_view.order_requested.connect(self._on_fast_order)
+                except Exception:
+                    pass
+
+            # 3b4. Authentic history -> 4-engine consensus / quorum / GBM telemetry
+            if hasattr(self.chart_widget, "backfill_loaded") and self.consensus_view is not None:
+                try:
+                    self.chart_widget.backfill_loaded.connect(self._on_history_loaded)
+                except Exception:
+                    pass
+            if hasattr(self.live_trading_view.chart, "backfill_loaded") and self.consensus_view is not None:
+                try:
+                    self.live_trading_view.chart.backfill_loaded.connect(self._on_history_loaded)
+                except Exception:
+                    pass
 
             # 3c. Portfolio 1-click square-off -> live router close at real LTP
             if hasattr(self.portfolio_view, "square_off_requested"):
@@ -690,18 +729,88 @@ class MainWindow(QMainWindow):
                 f"Execution Gate Notice:\n{res.get('message', 'Order rejected')}"
             )
 
-    def _on_symbol_sync(self, symbol: str) -> None:
-        """Row click in the scanner / market watch drives the primary chart."""
+    def _on_symbol_sync(self, symbol: str, ltp: Optional[float] = None,
+                        navigate: bool = True) -> None:
+        """
+        Global instrument bus: one selection updates every telemetry surface.
+
+        Fan-out: primary chart, Live Trading chart + DOM header, order ticket
+        (symbol + live price + capital-aware quantity), and the watch grid.
+        """
         if not symbol:
             return
+        if ltp is None:
+            try:
+                tick = type(self.stream_worker).get_latest_tick(symbol)
+                if tick:
+                    ltp = float(tick.get("ltp", 0.0)) or None
+            except Exception:
+                ltp = None
+
         try:
             self.chart_widget.set_symbol(symbol)
         except Exception:
             pass
+        if hasattr(self, "live_trading_view") and hasattr(self.live_trading_view, "set_symbol"):
+            try:
+                self.live_trading_view.set_symbol(symbol)
+            except Exception:
+                pass
+        if hasattr(self, "quick_trade") and hasattr(self.quick_trade, "set_symbol"):
+            try:
+                self.quick_trade.set_symbol(symbol, ltp)
+            except Exception:
+                pass
+        if hasattr(self, "consensus_view") and self.consensus_view is not None:
+            try:
+                self.consensus_view.reset()
+            except Exception:
+                pass
+        if navigate:
+            try:
+                self._switch_page(1)   # Live Trading View
+            except Exception:
+                pass
+
+    def _on_pill_selected(self, symbol: str) -> None:
+        """Top-bar index pill click: sync every surface, stay on the current page."""
+        self._on_symbol_sync(symbol, navigate=False)
+
+    def _on_history_loaded(self, df) -> None:
+        """Paints the 4-engine matrix from an authentic backfill frame."""
+        if self.consensus_view is None:
+            return
         try:
-            self._switch_page(1)   # Live Trading View
+            symbol = getattr(self.chart_widget, "current_symbol", "") or ""
+            self.consensus_view.update_from_df(df, symbol)
         except Exception:
             pass
+
+    def _on_fast_order(self, order: dict) -> None:
+        """Fast-ladder order: confirmed, then dispatched through the risk gate."""
+        if not isinstance(order, dict) or not order.get("symbol"):
+            return
+        sym = order.get("symbol")
+        side = str(order.get("side", "")).upper()
+        try:
+            choice = QMessageBox.question(
+                self,
+                f"Confirm Fast {side}",
+                f"Transmit a MARKET {side} order for {sym}?\n\n"
+                f"Quantity is sized by the router's uniform lot sizer and must pass "
+                f"the consensus, GBM and ₹70 statutory hurdles.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if choice != QMessageBox.Yes:
+                self._on_router_notification("Fast Order Cancelled", f"{side} {sym} not transmitted.")
+                return
+        except Exception:
+            pass
+        try:
+            self._on_quick_trade_order(order)   # same risk-gated dispatch path
+        except Exception as exc:
+            self._on_router_notification("Fast Order Failed", str(exc))
 
     def _on_square_off_position(self, trade_id: int) -> None:
         """
@@ -768,6 +877,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         if ltp > 0:
+            # Level-1 depth + ticket price for the charted instrument.
+            try:
+                self.live_trading_view.update_depth(
+                    sym,
+                    best_bid=tick.get("best_bid"),
+                    best_ask=tick.get("best_ask"),
+                    ltp=ltp,
+                )
+            except Exception:
+                pass
+            try:
+                if str(sym).strip().upper() == str(self.chart_widget.current_symbol).strip().upper():
+                    self.quick_trade.update_ltp(ltp, symbol=sym)
+            except Exception:
+                pass
+        if ltp > 0:
             # Fan the genuine tick out to the watch grid and scanner.
             try:
                 self.market_watch_view.update_quote(
@@ -798,16 +923,32 @@ class MainWindow(QMainWindow):
         the upstream source is unavailable. Nothing is ever synthesised here —
         a funding/auth/network gap must leave the chart empty rather than fake.
         """
+        import time as _time
         import pandas as pd
+        key = (str(symbol).strip().upper(), str(timeframe))
+        cache = getattr(self, "_history_cache", None)
+        if cache is None:
+            cache = self._history_cache = {}
+        now = _time.monotonic()
+        hit = cache.get(key)
+        # 5-minute positive cache, 60-second negative cache: a dead upstream must
+        # never be hammered on every symbol switch, and stale quotes are never
+        # served beyond the window.
+        if hit is not None and now - hit[0] < (300.0 if len(hit[1]) else 60.0):
+            return hit[1]
         try:
             from core.time_machine import MonteCarloTimeMachine
             period = {"1m": "7d", "5m": "60d", "15m": "60d", "1H": "60d",
                       "4H": "60d", "1D": "1y"}.get(timeframe, "60d")
             df = MonteCarloTimeMachine().fetch_historical_candles(symbol, period=period)
             if df is None or not hasattr(df, "empty") or df.empty:
+                cache[key] = (now, pd.DataFrame())
                 return pd.DataFrame()
-            return df.tail(240)
+            frame = df.tail(240)
+            cache[key] = (now, frame)
+            return frame
         except Exception:
+            cache[key] = (now, pd.DataFrame())
             return pd.DataFrame()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -858,3 +999,32 @@ class MainWindow(QMainWindow):
                 self.chart_widget.clear_canvas()
             except Exception:
                 pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Direct module entry point:  python -m ui.main_window
+# Mirrors main.py's boot sequence (theme → window → event loop) so the terminal
+# can be launched straight from this module during QA.
+# ─────────────────────────────────────────────────────────────────────────────
+def _launch() -> int:
+    import sys
+    from PySide6.QtWidgets import QApplication
+    from ui.styles import GlassmorphismTheme
+
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("OmniTradePro Institutional Terminal v5.0")
+    app.setOrganizationName("OmniTradePro Quantitative Systems")
+    try:
+        app.setStyleSheet(GlassmorphismTheme.get_stylesheet())
+    except Exception:
+        pass
+    window = MainWindow()
+    window.setWindowTitle("OmniTradePro v5.0 — Institutional Multi-Broker Terminal")
+    window.showMaximized()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(_launch())

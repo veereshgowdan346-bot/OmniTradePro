@@ -93,3 +93,91 @@ No candle, price, delta, probability or exit price is synthesised anywhere in `u
 - No protected file touched; no `.db`/`.key` artifacts staged.
 - UI 10/10, lifecycle 6/6, audit 38 gates CERTIFIED, smoke 12/12.
 - **Recommendation: merge PR #1** (squash or merge commit, base `main`).
+
+---
+
+# Addendum — Final polish & live-launch mission
+
+Commit: `feat(terminal): final institutional UI polish, comprehensive signal sync, and verified production launch`
+
+## A. Stage 1 self-audit — direct answers
+
+**1. Is this institutional-grade (TradingView/Bloomberg calibre) in aesthetics, stability and speed?**
+Aesthetics and speed: yes. Obsidian `#080b10` canvas, translucent slate `#141a24` glass, 1 px
+`rgba(255,255,255,0.07)` borders, cyan/emerald/ruby accents, 5 px hairline scrollbars, monospace
+numerics, rigid 56/36/220 geometry, 30 FPS decoupled render loop (33 ms; boot 342 ms). Stability:
+back-to-back suite + smoke runs with zero exceptions. The honest caveat is *content*grade, not
+calibre: in this sandbox no broker session exists, so surfaces show explicit unknown states
+(`—`, `-- ms`, "Awaiting Feed") instead of live numbers. That is the Zero-Fake-Data policy working,
+not a visual defect.
+
+**2. Any lingering visual flaws, Qt warnings, clipping fonts, raw scrollbars, vertical jumps?**
+Found and fixed in this pass:
+- Ticker pills clipped their third row (104×40 card, 66 px content hint) → rows pinned to 11/14/10 px,
+  labels width-clamped to 90 px, card padding tightened, hover affordance added (hint now 39 px).
+- Chart canvas left a dead band above the plot (no stretch) → canvas now `Expanding` with stretch 1,
+  minimum 320 px; measured 885×635 at 1600×950.
+- DOM card had the depth table squeezed at the bottom under a void → table takes stretch 1, note and
+  ladder pinned below.
+- Orphan "Available" label in the sidebar dock → now a `LEDGER` caption beside the live margin.
+- Emoji/icon font fallback chain added to nav buttons (`Segoe UI Emoji` → `Noto Color Emoji` →
+  `Apple Color Emoji`).
+- `python -m ui.main_window` emitted a runpy double-import warning → `ui/__init__.py` now re-exports
+  `MainWindow`/`DashboardView` lazily (PEP 562); launch log is warning-free.
+Remaining console noise is environmental only: `qt.text.font.db: OpenType support missing for
+"DejaVu Sans/Serif", script 18` — the container has no extended DejaVu/emoji coverage, so glyphs
+render as boxes here and normally on Windows. No `QPainter`, layout or QSS warnings are emitted.
+
+**3. Does live telemetry circulate end-to-end on selection?**
+Yes — one selection now fans out through a single bus (`MainWindow._on_symbol_sync`) wired to the
+top-bar pills, Market Watch rows/buttons, and the scanner grid:
+- Candlestick charts (dashboard + Live Trading View) switch instrument and request authentic
+  backfill; live ticks append to the in-flight candle (`update_tick`).
+- L2 DOM header follows the instrument and renders genuine L1 best-bid/best-ask, spread in ₹ and %,
+  and the live LTP; quantities stay `—` because L1 packets carry prices only.
+- Quick Order Ticket prefills the symbol (editable combo), shows a live coloured LTP, and computes
+  quantity as `floor(capital / LTP)` from the admin's capital allocation.
+- Verified: pill click → chart/live-chart/ticket all `"BANKNIFTY"`, page unchanged; watch row click →
+  `"INFY.NS"` + page 1 + ticket; tick → DOM `24,512.00 / 24,513.00`, spread `₹1.00 (0.004%)`,
+  ticket `INFY.NS · LTP ₹1,780.25`.
+
+**4. Are the 4 engines, ≥75 % quorum, ≥65 % GBM gate and ₹70 hurdle synchronised with the UI?**
+Yes, driven by real code paths and real data only. `ChartWidget.backfill_loaded` hands the authentic
+OHLCV frame to `StrategyConsensusView.update_from_df()`, which runs
+`ConsensusEngine.evaluate_consensus()` and `PredictiveGate.evaluate()` and paints:
+per-engine badges (SMC/VWAP/Dual EMA/SuperTrend), the quorum gauge with signal, regime and
+APPROVED/BLOCKED, the GBM reachability bar, and the ₹70 hurdle line with gross gain. Observed on a
+120-bar frame: `VWAP=SELL, EMA=SELL, SuperTrend=SELL, SMC=NEUTRAL`, quorum **75.0 %** (gate 75 %),
+regime **CHOPPY**, GBM **59.3 %**, hurdle **PASSED** (gross ₹298.92). With insufficient data the view
+states "Awaiting data (need ≥ 21 authentic candles)" — never a placeholder number.
+
+**5. Is Admin Sovereignty enforced?**
+Yes. Verified live widget ranges: capital **₹500 – ₹10,00,000** (default ₹1,000), risk **0.5 – 50 %**
+(default 5.0), max SL **₹10 – ₹50,000** (default ₹80), daily drawdown floor **2 – 50 %** (default 10,
+loaded from SQLite `execution_config`). The earlier ₹2,000 / 10 % hard locks are gone; the only
+constants are defaults, and every value round-trips to the database and the live engines.
+
+## B. Stage 2 additions in this pass
+- `LiveTradingView`: `symbol_selected` / `order_requested` signals, `set_symbol()`, `update_depth()`,
+  honest DOM note, and FAST BUY/SELL wired to a confirmation modal → the certified risk-gated
+  dispatcher (`_on_quick_trade_order`), which refuses to price an order without a genuine quote.
+- `HeaderTopBar`: clickable index pills (`ticker_clicked`), hover styling, three-row price/delta layout.
+- `QuickTradeCard`: `set_symbol()`, `update_ltp()`, capital-aware `_sync_quantity()`, editable symbol combo.
+- `StrategyConsensusView`: `update_from_df()` / `reset()` plus bound gauge/label references.
+- `MainWindow`: single telemetry bus, fast-order path, history→engine fan-out, history provider cache
+  (5 min positive / 60 s negative) so a dead upstream is never hammered, `__main__` launcher.
+- `ChartWidget`: `Expanding` canvas, `backfill_loaded` signal; a failed backfill no longer wipes live
+  candles that already streamed in.
+
+## C. Stage 3/4 verification
+| Check | Result |
+|---|---|
+| `python ui/test_ui_components.py` | **10/10 PASS** |
+| `python -X utf8 brokers/test_strategy_order_lifecycle.py` | **6/6 PASS** (0 failures, 0 errors) |
+| `python audit_production_certification.py` | **CERTIFIED** — 38 gates, 37 PASS / 0 FAIL / 1 WARN |
+| `python audit_runtime_smoke.py` | 12/12 true, boot **342 ms**, 0 exceptions |
+| `python -m ui.main_window` | launched, window shown, event loop stable ≥ 40 s, **no traceback** |
+
+Launch note: this sandbox has no display server, so the terminal is launched headless
+(`QT_QPA_PLATFORM=offscreen`) to prove cold-start integrity; on the operator's Windows machine
+`run.bat` / `python main.py` / `python -m ui.main_window` open the visible window.

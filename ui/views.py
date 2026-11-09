@@ -203,6 +203,9 @@ class BasePageView(QScrollArea):
 class LiveTradingView(BasePageView):
     """Page 1: Full-height candlestick chart, DOM depth, fast buy/sell ladder."""
 
+    symbol_selected = Signal(str)   # instrument requested from this page
+    order_requested = Signal(dict)  # fast ladder -> risk-gated dispatch
+
     def __init__(self, parent=None) -> None:
         super().__init__("📈 LIVE TRADING & DEPTH OF MARKET (DOM)", "High-frequency chart canvas, Level 2 orderbook depth, and fast execution ladder.", parent)
         self._init_body()
@@ -222,9 +225,13 @@ class LiveTradingView(BasePageView):
         dl = QVBoxLayout(dom_card)
         dl.setSpacing(8)
 
-        lbl_dom = QLabel("DEPTH OF MARKET (L2)", dom_card)
-        lbl_dom.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
-        dl.addWidget(lbl_dom)
+        self.dom_title = QLabel("DEPTH OF MARKET (L2) · —", dom_card)
+        self.dom_title.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
+        dl.addWidget(self.dom_title)
+
+        self.dom_spread = QLabel("Spread: —   |   L1 stream: awaiting broker feed", dom_card)
+        self.dom_spread.setStyleSheet("color: #64748b; font-size: 10px; font-family: 'Consolas', monospace;")
+        dl.addWidget(self.dom_spread)
 
         dom_table = QTableWidget(5, 4, dom_card)
         dom_table.setHorizontalHeaderLabels(["Bids", "Qty", "Asks", "Qty"])
@@ -252,16 +259,33 @@ class LiveTradingView(BasePageView):
         except Exception:
             pass
 
-        bids = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
-        asks = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
+        self.dom_table = dom_table
 
+        # Zero-Fake-Data: every level boots as an em dash. Level 1 is filled from
+        # the broker's genuine best-bid/best-ask; deeper levels stay unknown
+        # until the feed publishes them.
         for r in range(5):
-            dom_table.setItem(r, 0, QTableWidgetItem(bids[r][0]))
-            dom_table.setItem(r, 1, QTableWidgetItem(bids[r][1]))
-            dom_table.setItem(r, 2, QTableWidgetItem(asks[r][0]))
-            dom_table.setItem(r, 3, QTableWidgetItem(asks[r][1]))
+            for c in range(4):
+                item = QTableWidgetItem("—")
+                try:
+                    from PySide6.QtGui import QBrush, QColor
+                    item.setForeground(QBrush(QColor("#475569")))
+                except Exception:
+                    pass
+                dom_table.setItem(r, c, item)
 
-        dl.addWidget(dom_table)
+        # Table owns the vertical space (stretch=1) so the card never shows a
+        # dead band between the quote strip and the depth ladder.
+        dl.addWidget(dom_table, 1)
+
+        # Honest scope note: the broker feed exposes L1 only today.
+        self.dom_note = QLabel(
+            "L1 (best bid/ask) streams live. Levels 2–5 render when the broker\n"
+            "feed publishes size — no level is ever simulated.",
+            dom_card,
+        )
+        self.dom_note.setStyleSheet("color: #475569; font-size: 9px; line-height: 13px;")
+        dl.addWidget(self.dom_note)
 
         # Fast Execution Ladder
         ladder_layout = QHBoxLayout()
@@ -275,8 +299,84 @@ class LiveTradingView(BasePageView):
         ladder_layout.addWidget(btn_fs)
         dl.addLayout(ladder_layout)
 
+        # Fast ladder -> risk-gated market dispatch for the charted instrument.
+        self.btn_fast_buy = btn_fb
+        self.btn_fast_sell = btn_fs
+        try:
+            btn_fb.clicked.connect(lambda: self._emit_fast_order("BUY"))
+            btn_fs.clicked.connect(lambda: self._emit_fast_order("SELL"))
+        except Exception:
+            pass
+
         split_layout.addWidget(dom_card, 30)
-        self.layout_main.addLayout(split_layout)
+        self.layout_main.addLayout(split_layout, 1)   # chart page owns the height
+
+    # ── Live telemetry API ───────────────────────────────────────────────────
+
+    def set_symbol(self, symbol: str) -> None:
+        """Syncs the chart + DOM header to a newly selected instrument."""
+        if not symbol:
+            return
+        try:
+            self.chart.set_symbol(symbol)
+        except Exception:
+            pass
+        try:
+            self.dom_title.setText(f"DEPTH OF MARKET (L2) · {symbol}")
+            self.dom_spread.setText("Spread: —   |   L1 stream: awaiting broker feed")
+            for r in range(5):
+                for c in range(4):
+                    self.dom_table.setItem(r, c, QTableWidgetItem("—"))
+        except Exception:
+            pass
+
+    def update_depth(self, symbol: str, best_bid=None, best_ask=None, ltp=None) -> None:
+        """
+        Renders the broker's genuine Level-1 quote as DOM row 0.
+
+        Deeper levels are left as em dashes: the terminal must not invent size.
+        """
+        try:
+            if symbol and symbol.strip().upper() not in self.dom_title.text().upper():
+                return
+            bb = float(best_bid) if best_bid else None
+            ba = float(best_ask) if best_ask else None
+            if bb:
+                self.dom_table.item(0, 0).setText(f"{bb:,.2f}")
+            if ba:
+                self.dom_table.item(0, 2).setText(f"{ba:,.2f}")
+            # Quantity columns remain em dashes: L1 packets carry prices only,
+            # and the terminal never invents size.
+            if bb and ba and bb > 0 and ba > 0:
+                spread = ba - bb
+                self.dom_spread.setText(
+                    f"Spread: ₹{spread:,.2f} ({spread / bb * 100.0:.3f}%)   |   "
+                    f"L1 LIVE   |   LTP: ₹{float(ltp):,.2f}" if ltp else
+                    f"Spread: ₹{spread:,.2f} ({spread / bb * 100.0:.3f}%)   |   L1 LIVE"
+                )
+        except Exception:
+            pass
+
+    def _emit_fast_order(self, side: str) -> None:
+        """Publishes a fast-ladder market order for the currently charted symbol."""
+        try:
+            symbol = getattr(self.chart, "current_symbol", "") or ""
+        except Exception:
+            symbol = ""
+        if not symbol:
+            return
+        # One unit: the router's uniform lot sizer and risk budget own the final
+        # quantity, so the ladder never guesses position size on its own.
+        try:
+            self.order_requested.emit({
+                "symbol": symbol,
+                "side": side,
+                "quantity": 1,
+                "order_type": "MARKET",
+                "product": "INTRADAY",
+            })
+        except Exception:
+            pass
 
 
 class TradingBotsView(BasePageView):
@@ -1177,6 +1277,9 @@ class StrategyConsensusView(BasePageView):
             ("SuperTrend Gate", "🟣", "#818cf8", "ATR-based directional filter with trailing stop floor."),
         ]
 
+        self._engine_badges = {}
+        self._engine_meta = {}
+
         for name, dot, accent, desc in engine_data:
             card = QFrame(self.container)
             card.setStyleSheet(f"""
@@ -1213,6 +1316,9 @@ class StrategyConsensusView(BasePageView):
             except Exception:
                 pass
             cl.addWidget(signal_lbl)
+
+            self._engine_badges[name] = signal_lbl
+            self._engine_meta[name] = (accent, desc)
 
             # Confidence bar
             conf_bar = QProgressBar(card)
@@ -1292,10 +1398,12 @@ class StrategyConsensusView(BasePageView):
             }
         """)
         ql.addWidget(quorum_bar)
+        self.quorum_bar = quorum_bar
 
         quorum_status = QLabel("Status: Awaiting live strategy feed", quorum_card)
         quorum_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
         ql.addWidget(quorum_status)
+        self.quorum_status = quorum_status
         gate_layout.addWidget(quorum_card, 60)
 
         # Predictive Gate Card
@@ -1341,14 +1449,134 @@ class StrategyConsensusView(BasePageView):
             }
         """)
         pl.addWidget(pred_bar)
+        self.pred_bar = pred_bar
 
         hurdle_lbl = QLabel("₹70 Net Hurdle: AWAITING SIGNAL", pred_card)
         hurdle_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600; font-family: 'Consolas', monospace;")
         pl.addWidget(hurdle_lbl)
+        self.hurdle_lbl = hurdle_lbl
         gate_layout.addWidget(pred_card, 40)
 
         self.layout_main.addLayout(gate_layout)
         self.layout_main.addStretch()
+
+    # ── Live engine telemetry (real core engines, real candles) ──────────────
+
+    _VOTE_STYLE = {
+        1: ("BUY", "#10b981", "rgba(16, 185, 129, 0.15)", "rgba(16, 185, 129, 0.55)"),
+        -1: ("SELL", "#ef4444", "rgba(239, 68, 68, 0.15)", "rgba(239, 68, 68, 0.55)"),
+        0: ("NEUTRAL", "#94a3b8", "rgba(100, 116, 139, 0.15)", "rgba(100, 116, 139, 0.4)"),
+    }
+
+    def _paint_badge(self, name: str, vote: int) -> None:
+        lbl = self._engine_badges.get(name)
+        if lbl is None:
+            return
+        text, color, bg, border = self._VOTE_STYLE.get(int(vote), self._VOTE_STYLE[0])
+        try:
+            lbl.setText(text)
+            lbl.setStyleSheet(
+                f"background-color: {bg}; border: 1px solid {border}; border-radius: 4px; "
+                f"color: {color}; font-size: 12px; font-weight: 800; padding: 4px 10px;"
+            )
+        except Exception:
+            pass
+
+    def update_from_df(self, df, symbol: str = "") -> None:
+        """
+        Runs the real core engines over authentic candles and paints the matrix.
+
+        Nothing is estimated here: the votes, the quorum score, the regime and the
+        GBM probability all come from ``core.strategies`` / ``core.consensus`` /
+        ``core.predictive_gate``. With insufficient data every badge stays NEUTRAL
+        and the gauges read "Awaiting data".
+        """
+        try:
+            import pandas as pd  # local import: UI must stay importable without pandas
+            from core.consensus import ConsensusEngine
+            from core.predictive_gate import PredictiveGate
+        except Exception:
+            return
+        if df is None or getattr(df, "empty", True) or len(df) < 21:
+            try:
+                self.quorum_status.setText(
+                    "Status: Awaiting data (need ≥ 21 authentic candles)"
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            result = ConsensusEngine.evaluate_consensus(df)
+        except Exception as exc:
+            try:
+                self.quorum_status.setText(f"Engine error: {exc}")
+            except Exception:
+                pass
+            return
+
+        breakdown = result.get("breakdown", {}) or {}
+        self._paint_badge("SMC Liquidity Grab", breakdown.get("smc", 0))
+        self._paint_badge("Institutional VWAP", breakdown.get("vwap", 0))
+        self._paint_badge("Dual EMA 9/21", breakdown.get("ema", 0))
+        self._paint_badge("SuperTrend Gate", breakdown.get("supertrend", 0))
+
+        score = float(result.get("consensus_score", 0.0) or 0.0)
+        approved = bool(result.get("approved", False))
+        signal = str(result.get("signal", "NEUTRAL"))
+        regime = str(result.get("regime", "—"))
+        try:
+            self.quorum_bar.setValue(int(round(min(100.0, max(0.0, score)))))
+            tick = f"{symbol} · " if symbol else ""
+            self.quorum_status.setText(
+                f"{tick}{signal} · quorum {score:.1f}% (gate 75%) · regime {regime} · "
+                f"{'APPROVED' if approved else 'BLOCKED'}"
+            )
+            self.quorum_status.setStyleSheet(
+                f"color: {'#10b981' if approved else '#fbbf24'}; font-size: 11px; font-weight: 700;"
+            )
+        except Exception:
+            pass
+
+        # GBM predictive gate on the engine's own bracket
+        try:
+            entry = float(result.get("entry_price", 0.0) or 0.0)
+            target = float(result.get("target_price", 0.0) or 0.0)
+            stop = float(result.get("stop_loss", 0.0) or 0.0)
+            if entry > 0 and target > 0 and stop > 0:
+                gate = PredictiveGate.evaluate(
+                    df, signal=signal, entry_price=entry,
+                    target_price=target, stop_loss=stop,
+                )
+                prob = float(gate.get("probability_pct", 0.0) or 0.0)
+                self.pred_bar.setValue(int(round(min(100.0, max(0.0, prob)))))
+                gross = float(gate.get("expected_gross_gain", 0.0) or 0.0)
+                self.hurdle_lbl.setText(
+                    f"₹70 Net Hurdle: {'PASSED' if gate.get('hurdle_passed') else 'BLOCKED'} · "
+                    f"gross ₹{gross:,.2f} · reachability {prob:.1f}%"
+                )
+                self.hurdle_lbl.setStyleSheet(
+                    "color: #10b981; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;"
+                    if gate.get("hurdle_passed") else
+                    "color: #fbbf24; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;"
+                )
+            else:
+                self.pred_bar.setValue(0)
+                self.hurdle_lbl.setText("₹70 Net Hurdle: AWAITING ENGINE BRACKET")
+        except Exception:
+            pass
+
+    def reset(self) -> None:
+        """Returns every gauge to its explicit unknown state."""
+        for name in getattr(self, "_engine_badges", {}):
+            self._paint_badge(name, 0)
+        try:
+            self.quorum_bar.setValue(0)
+            self.pred_bar.setValue(0)
+            self.quorum_status.setText("Status: Awaiting live strategy feed")
+            self.hurdle_lbl.setText("₹70 Net Hurdle: AWAITING SIGNAL")
+        except Exception:
+            pass
 
 
 class ReportsView(BasePageView):
