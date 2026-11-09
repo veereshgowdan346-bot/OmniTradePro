@@ -162,7 +162,7 @@ def run_suite4():
     
     # Trigger Kill Switch and measure precise elapsed time
     t_kill_start = time.perf_counter()
-    window._on_emergency_kill_switch()
+    window._on_emergency_kill_switch(confirm=False)  # headless: pre-authorised
     t_kill_end = time.perf_counter()
     
     kill_elapsed_ms = (t_kill_end - t_kill_start) * 1000.0

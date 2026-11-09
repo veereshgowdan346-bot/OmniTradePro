@@ -2,9 +2,9 @@
 
 **Verdict: CERTIFIED FOR PRODUCTION**
 
-- Generated: 2026-11-09T06:49:45+00:00
+- Generated: 2026-11-09T07:11:33+00:00
 - Host: Linux-6.1.158+-x86_64-with-glibc2.36 | Python 3.11.2
-- Sandbox data directory: `/tmp/omnitrade_cert_9lgr4os9`
+- Sandbox data directory: `/tmp/omnitrade_cert_4t4jnv71`
 - Gates: **38** | PASS 37 | FAIL 0 | WARN 1 | SKIP 0
 
 Every status below is derived from an executed assertion or a subprocess exit
@@ -12,15 +12,15 @@ code. No row is hardcoded.
 
 | Stage | Gate | Status | Evidence |
 |---|---|---|---|
-| Stage 1 - Syntax, AST & Import Audit | AST parse of 56 modules (23,588 LOC) | PASS | zero SyntaxError |
+| Stage 1 - Syntax, AST & Import Audit | AST parse of 56 modules (24,193 LOC) | PASS | zero SyntaxError |
 |  | Import verification (39 modules) | PASS | 39/39 imported cleanly |
 |  | Eager import cycle detection (56 modules) | PASS | zero module-scope cycles |
 | Stage 2 - Database & State Persistence | execution_config CRUD (mode, capital, risk %, max_sl, drawdown) | PASS | read back mode=LIVE cap=2500.0 risk=4.8 sl=120.0 dd=15.0 |
 |  | Cross-handler execution_config consistency | PASS | DatabaseHandler sees cap=2500.0 sl=120.0 |
 |  | AES-256 vault round trip + live TOTP (3 brokers) | PASS | encrypt/decrypt verified, zero plaintext secrets on disk |
-|  | Audit-log timestamp precision (sub-millisecond) | PASS | ISO-8601 microsecond precision stored: 2026-11-09T06:49:30.509824+00:00 |
+|  | Audit-log timestamp precision (sub-millisecond) | PASS | ISO-8601 microsecond precision stored: 2026-11-09T07:11:18.985542+00:00 |
 |  | SQLite WAL journal mode | PASS | journal_mode=wal |
-| Stage 3 - Front-End UI & Signal Wiring | UI component suite (10 dimensions) | PASS | exit=0 pass_assertions=12 fail_assertions=0 in 1.2s |
+| Stage 3 - Front-End UI & Signal Wiring | UI component suite (10 dimensions) | PASS | exit=0 pass_assertions=12 fail_assertions=0 in 1.3s |
 | Stage 4 - Quant Strategy & Consensus Audit | Strategy vote: SMC Liquidity Sweep (3-candle confirmation) | PASS | vote=+1 |
 |  | Strategy vote: Institutional VWAP | PASS | vote=+1 |
 |  | Strategy vote: Dual EMA (9/21) | PASS | vote=+1 |
@@ -39,12 +39,12 @@ code. No row is hardcoded.
 |  | Intraday circuit breaker trips | PASS | Cumulative intraday realized loss ₹350.00 >= 2.5x max SL limit (₹300.00). |
 | Stage 5 - Order Router & Uniform Risk Enforcement | Strategy/order lifecycle suite (6 dimensions) | PASS | exit=0 pass_assertions=33 fail_assertions=0 in 1.3s |
 | Stage 6 - Live Runtime Smoke Test | MainWindow instantiated and shown | PASS | True |
-|  | Boot time within budget (323 ms < 5000 ms) | PASS | True |
+|  | Boot time within budget (345 ms < 5000 ms) | PASS | True |
 |  | 12 views registered in QStackedWidget | PASS | True |
 |  | 30 FPS render timer active | PASS | True |
 |  | Render timer interval ~33 ms | PASS | True |
 |  | Historical candlestick backfill accepted | PASS | True |
-|  | Event loop survived 10.3s | PASS | True |
+|  | Event loop survived 10.4s | PASS | True |
 |  | Mock ticks ingested via tick_received signal | PASS | True |
 |  | 12-page navigation stable under tick load | PASS | True |
 |  | No uncaught Python exception | PASS | True |

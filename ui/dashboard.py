@@ -244,6 +244,7 @@ class HeaderTopBar(QFrame):
 
         # 2. Four Index Ticker Cards (Default Standby / Zero Fake State)
         self.ticker_widgets = {}
+        self.ticker_deltas = {}   # index name -> point-delta + % badge QLabel
         tickers_data = ["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX"]
 
         for name in tickers_data:
@@ -271,10 +272,17 @@ class HeaderTopBar(QFrame):
             t_val = QLabel("<span style='color:#64748b;'>Standby</span>", t_card)
             t_val.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;")
 
+            # Point-delta + % badge line. Starts as an em dash (unknown), never
+            # as an invented number — Zero-Fake-Data.
+            t_delta = QLabel("<span style='color:#475569;'>—</span>", t_card)
+            t_delta.setStyleSheet("color: #475569; font-size: 8px; font-weight: 700; font-family: 'Consolas', monospace;")
+
             t_layout.addWidget(t_name)
             t_layout.addWidget(t_val)
+            t_layout.addWidget(t_delta)
             layout.addWidget(t_card)
             self.ticker_widgets[name] = t_val
+            self.ticker_deltas[name] = t_delta
 
         layout.addSpacing(8)
 
@@ -439,21 +447,52 @@ class HeaderTopBar(QFrame):
             self.latency_pill.setText(f"🔴 High Latency  {latency_ms}ms")
             self.latency_pill.setStyleSheet("background-color: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.4); border-radius: 10px; color: #ef4444; font-weight: 700; font-size: 10px; padding: 3px 10px;")
 
-    def update_ticker(self, name: str, price: float, chg_pct: float = 0.0) -> None:
-        """Updates ticker card with genuine exchange numbers."""
+    def update_ticker(self, name: str, price: float, chg_pct: Optional[float] = None,
+                      prev_close: Optional[float] = None) -> None:
+        """
+        Updates a ticker card with genuine exchange numbers.
+
+        The point delta is only rendered when a real reference exists:
+
+        * ``prev_close``  -> exact exchange points: ``price - prev_close``
+        * ``chg_pct``     -> points back-solved from the real percentage change
+        * neither         -> em dash; the terminal never invents a delta
+        """
         norm_name = name.strip().upper()
         target_key = None
         for key in self.ticker_widgets:
             if key == norm_name or key.replace(" ", "") == norm_name.replace(" ", ""):
                 target_key = key
                 break
-        if target_key:
-            col = "#10b981" if chg_pct >= 0 else "#ef4444"
-            sign = "+" if chg_pct >= 0 else ""
-            arrow = "▲" if chg_pct >= 0 else "▼"
-            self.ticker_widgets[target_key].setText(
-                f"{price:,.2f} <span style='color:{col}; font-size:10px; font-weight:bold;'>{arrow} {sign}{chg_pct:.2f}%</span>"
-            )
+        if not target_key:
+            return
+
+        self.ticker_widgets[target_key].setText(f"{price:,.2f}")
+
+        delta_lbl = getattr(self, "ticker_deltas", {}).get(target_key)
+        if delta_lbl is None:
+            return
+
+        points: Optional[float] = None
+        pct: Optional[float] = None
+        if prev_close is not None and float(prev_close) > 0:
+            points = price - float(prev_close)
+            pct = points / float(prev_close) * 100.0
+        elif chg_pct is not None and float(chg_pct) != 0.0:
+            pct = float(chg_pct)
+            points = price - price / (1.0 + pct / 100.0)
+
+        if points is None or pct is None:
+            delta_lbl.setText("<span style='color:#475569;'>—</span>")
+            return
+
+        col = "#10b981" if points >= 0 else "#ef4444"
+        sign = "+" if points >= 0 else ""
+        arrow = "▲" if points >= 0 else "▼"
+        delta_lbl.setText(
+            f"<span style='color:{col};'>{arrow} {sign}{points:,.2f} "
+            f"({sign}{pct:.2f}%)</span>"
+        )
 
 
 class SubHeaderNavBar(QWidget):
@@ -512,154 +551,13 @@ class SubHeaderNavBar(QWidget):
         layout.addStretch()
 
 
-class LeftSidebar(QFrame):
-    """
-    Vertical navigation sidebar with working QStackedWidget routing.
-    Emits nav_changed(index) when any of the 12 tabs are clicked,
-    and updates visual active pill highlighting.
-    """
-    nav_changed = Signal(int)
-
-    NAV_ITEMS = [
-        "⊞ Dashboard",
-        "📈 Live Trading",
-        "⚙ Trading Bots",
-        "⚙ Strategies",
-        "👁 Market Watch",
-        "⚡ Auto Trade",
-        "⏱ Backtest",
-        "📊 Analytics",
-        "💼 Portfolio",
-        "🛡 Risk Manager",
-        "📄 Reports",
-        "⚙ Settings"
-    ]
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFixedWidth(162)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #080b10;
-                border-right: 1px solid rgba(255, 255, 255, 0.06);
-            }
-        """)
-        self.buttons: List[QPushButton] = []
-        self.active_index: int = 0
-        self._init_ui()
-
-    def _init_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 8, 6, 8)
-        layout.setSpacing(3)
-
-        for idx, text in enumerate(self.NAV_ITEMS):
-            btn = QPushButton(text, self)
-            try:
-                btn.clicked.connect(lambda checked=False, i=idx: self._on_btn_clicked(i))
-            except Exception:
-                pass
-            layout.addWidget(btn)
-            self.buttons.append(btn)
-
-        self._refresh_styles()
-
-        layout.addSpacing(6)
-
-        # Embedded Compact Front-Page Execution & Risk Controller
-        try:
-            from ui.quick_risk_widget import QuickRiskControlWidget
-            self.risk_controller = QuickRiskControlWidget(self)
-            layout.addWidget(self.risk_controller)
-        except Exception:
-            self.risk_controller = None
-
-        layout.addStretch()
-
-        # Clean Institutional Executive System Badge
-        brand_card = QFrame(self)
-        brand_card.setStyleSheet("""
-            QFrame {
-                background-color: #121824;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 6px;
-                padding: 6px;
-            }
-        """)
-        bc_layout = QVBoxLayout(brand_card)
-        bc_layout.setContentsMargins(4, 4, 4, 4)
-        bc_layout.setSpacing(2)
-        lbl_v = QLabel("⚡ OmniTradePro", brand_card)
-        lbl_v.setAlignment(Qt.AlignCenter)
-        lbl_v.setStyleSheet("color: #00e5ff; font-size: 10px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
-        lbl_sub = QLabel("Hedge Terminal v5.0", brand_card)
-        lbl_sub.setAlignment(Qt.AlignCenter)
-        lbl_sub.setStyleSheet("color: #64748b; font-size: 9px;")
-        bc_layout.addWidget(lbl_v)
-        bc_layout.addWidget(lbl_sub)
-        layout.addWidget(brand_card)
-
-        # Invisible label for backward compatibility
-        self.mascot_lbl = QLabel(self)
-        self.mascot_lbl.setVisible(False)
-
-        # Status Pill: '● System Online'
-        status_pill = QLabel("● System Online", self)
-        status_pill.setAlignment(Qt.AlignCenter)
-        status_pill.setStyleSheet("""
-            QLabel {
-                background-color: rgba(16, 185, 129, 0.12);
-                border: 1px solid #10b981;
-                border-radius: 10px;
-                color: #10b981;
-                font-weight: 800;
-                font-size: 10px;
-                padding: 3px 6px;
-            }
-        """)
-        layout.addWidget(status_pill)
-
-    def _on_btn_clicked(self, index: int) -> None:
-        self.set_active_index(index)
-        self.nav_changed.emit(index)
-
-    def set_active_index(self, index: int) -> None:
-        """Sets active tab index and refreshes visual highlights."""
-        self.active_index = index
-        self._refresh_styles()
-
-    def _refresh_styles(self) -> None:
-        for idx, btn in enumerate(self.buttons):
-            if idx == self.active_index:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(0, 229, 255, 0.14);
-                        color: #00e5ff;
-                        font-weight: 800;
-                        font-size: 11px;
-                        border-radius: 5px;
-                        padding: 7px 10px;
-                        text-align: left;
-                        border: 1px solid #00e5ff;
-                    }
-                """)
-            else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: transparent;
-                        color: #94a3b8;
-                        font-weight: 600;
-                        font-size: 11px;
-                        border-radius: 5px;
-                        padding: 6px 10px;
-                        text-align: left;
-                        border: 1px solid transparent;
-                    }
-                    QPushButton:hover {
-                        background-color: rgba(255, 255, 255, 0.05);
-                        color: #ffffff;
-                    }
-                """)
+# ─────────────────────────────────────────────────────────────────────────────
+# LeftSidebar lives in ui/sidebar.py (single source of truth for the 9-tab
+# grouped navigation + live telemetry dock). Re-exported here so existing
+# imports (`from ui.dashboard import LeftSidebar`, `ui/__init__.py`,
+# `ui/main_window.py`) keep working unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+from ui.sidebar import LeftSidebar  # noqa: E402,F401  (backward-compatible alias)
 
 
 class QuickTradeCard(QFrame):

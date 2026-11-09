@@ -98,7 +98,7 @@ from ui.chart_widget import ChartWidget
 from ui.views import (
     LiveTradingView, TradingBotsView, StrategiesView, MarketWatchView,
     AutoTradeView, BacktestView, AnalyticsView, PortfolioView,
-    RiskManagerView, ReportsView, SettingsView
+    RiskManagerView, ReportsView, SettingsView, StrategyConsensusView
 )
 from ui.scanner_panel import ScannerPanel
 from ui.broker_control_widget import BrokerControlWidget
@@ -246,6 +246,14 @@ class MainWindow(QMainWindow):
 
         # Convenience references for backwards compatibility & tests
         self.chart_widget = self.dashboard_view.chart_widget
+
+        # Real-data provider registration (no network call happens here). The
+        # canvas only fetches once a genuine live tick proves the feed is up.
+        try:
+            self.chart_widget.set_history_provider(self._fetch_history_backfill)
+        except Exception:
+            pass
+        self._backfill_started = False
         self.quick_trade = self.dashboard_view.quick_trade
         self.order_panel = self.dashboard_view.quick_trade
         self.broker_control = self.dashboard_view.broker_control
@@ -257,6 +265,30 @@ class MainWindow(QMainWindow):
         self.ai_sentiment_card = self.dashboard_view.ai_sentiment_card
         self.system_health_card = self.dashboard_view.system_health_card
         self.scanner_panel = ScannerPanel(self)
+
+        # Mount the scanner grid inside the Live Market Watch page (page 4) so
+        # it is actually reachable — previously it was instantiated but never
+        # added to any layout.
+        try:
+            self.market_watch_view.layout_main.addWidget(self.scanner_panel)
+        except Exception:
+            pass
+
+        # Mount the 4-engine consensus matrix into the Strategies page (page 3)
+        # so the "🧠 Strategy Consensus" tab lands on a real quorum/GBM meter —
+        # previously StrategyConsensusView was defined but never instantiated.
+        self.consensus_view = None
+        try:
+            self.consensus_view = StrategyConsensusView(self.strategies_view)
+            # Nested inside a QScrollArea already: avoid a second scrollbar.
+            for _policy in ("setVerticalScrollBarPolicy", "setHorizontalScrollBarPolicy"):
+                try:
+                    getattr(self.consensus_view, _policy)(Qt.ScrollBarAlwaysOff)
+                except Exception:
+                    pass
+            self.strategies_view.layout_main.addWidget(self.consensus_view)
+        except Exception:
+            self.consensus_view = None
 
         # Add all 12 pages to stack
         self.stacked_widget.addWidget(self.dashboard_view)          # 0
@@ -286,6 +318,22 @@ class MainWindow(QMainWindow):
 
             # 3. Settings gear on top bar routes to SettingsView (Page 11)
             self.top_bar.btn_settings.clicked.connect(lambda: self._switch_page(11))
+
+            # 3b. Scanner / Market-Watch row clicks sync the primary chart
+            for _src in ("scanner_panel", "market_watch_view"):
+                obj = getattr(self, _src, None)
+                if obj is not None and hasattr(obj, "symbol_selected"):
+                    try:
+                        obj.symbol_selected.connect(self._on_symbol_sync)
+                    except Exception:
+                        pass
+
+            # 3c. Portfolio 1-click square-off -> live router close at real LTP
+            if hasattr(self.portfolio_view, "square_off_requested"):
+                try:
+                    self.portfolio_view.square_off_requested.connect(self._on_square_off_position)
+                except Exception:
+                    pass
 
             # 4. Emergency Kill Switch (Global across all 12 views)
             self.top_bar.kill_switch_triggered.connect(self._on_emergency_kill_switch)
@@ -375,8 +423,11 @@ class MainWindow(QMainWindow):
                         if rms.get("status"):
                             self.portfolio_card.update_rms_funds(rms, len(self.order_router.positions))
                             net_cap = float(rms.get("net", 0.0) or 0.0)
+                            self._rms_available = net_cap
                             if hasattr(self, "top_bar") and hasattr(self.top_bar, "update_nav"):
                                 self.top_bar.update_nav(net_cap)
+                            if hasattr(self, "sidebar") and hasattr(self.sidebar, "set_margin"):
+                                self.sidebar.set_margin(net_cap)
                     except Exception:
                         pass
                 threading.Thread(target=fetch_rms, daemon=True, name="RMSFundsFetcher").start()
@@ -443,7 +494,17 @@ class MainWindow(QMainWindow):
             open_pos_count = len(self.order_router.positions)
             self.portfolio_card.val_pos.setText(str(open_pos_count))
 
-            # 5. Real OS CPU & RAM Telemetry
+            # 5. Sidebar dock: connection pulse + ledger margin
+            if hasattr(self, "sidebar"):
+                if hasattr(self.sidebar, "set_connection_state"):
+                    self.sidebar.set_connection_state(
+                        self.stream_worker.isRunning(),
+                        self.stream_worker.get_dispatch_latency_ms()
+                    )
+                if hasattr(self.sidebar, "set_margin"):
+                    self.sidebar.set_margin(getattr(self, "_rms_available", None))
+
+            # 6. Real OS CPU & RAM Telemetry
             is_conn = self.stream_worker.isRunning()
             active_broker = self.db.get_active_broker()
             b_name = active_broker.get("broker_name", "ANGEL_ONE") if active_broker else "DISCONNECTED"
@@ -455,12 +516,40 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _on_emergency_kill_switch(self) -> None:
+    def _on_emergency_kill_switch(self, confirm: Optional[bool] = None) -> None:
         """
         Engages Emergency Kill Switch across the entire application:
         Blocks orders in RiskEngine, auto liquidates open positions via OrderRouter,
         and displays an institutional confirmation alert.
+
+        A destructive, irreversible action must be confirmed BEFORE it is executed.
+        Previously the halt + square-off ran first and only then showed a warning.
         """
+        try:
+            open_positions = len(self.order_router.positions)
+        except Exception:
+            open_positions = 0
+        # confirm is None on the live UI path (modal), or an explicit
+        # True/False when driven programmatically (benchmarks, automation).
+        if confirm is None:
+            choice = QMessageBox.question(
+                self,
+                "Confirm Emergency Kill Switch",
+                f"Engage the global kill switch?\n\n"
+                f"• All new orders will be blocked immediately\n"
+                f"• {open_positions} open position(s) will be squared off at market\n"
+                f"• This action is not reversible from the terminal",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if choice != QMessageBox.Yes:
+                self._on_router_notification(
+                    "Kill Switch Cancelled", "Operator declined the emergency halt."
+                )
+                return
+        elif confirm is False:
+            pass  # pre-authorised by the caller
+
         self.risk_engine.is_halted = True
         self.risk_engine.halt_reason = "EMERGENCY KILL SWITCH ENGAGED BY OPERATOR"
         liquidated = self.order_router.auto_square_off_all("EMERGENCY_KILL_SWITCH")
@@ -601,22 +690,162 @@ class MainWindow(QMainWindow):
                 f"Execution Gate Notice:\n{res.get('message', 'Order rejected')}"
             )
 
+    def _on_symbol_sync(self, symbol: str) -> None:
+        """Row click in the scanner / market watch drives the primary chart."""
+        if not symbol:
+            return
+        try:
+            self.chart_widget.set_symbol(symbol)
+        except Exception:
+            pass
+        try:
+            self._switch_page(1)   # Live Trading View
+        except Exception:
+            pass
+
+    def _on_square_off_position(self, trade_id: int) -> None:
+        """
+        Closes a single position at its real live LTP.
+
+        Refuses to act without a genuine quote: never invent an exit price.
+        """
+        router = getattr(self, "order_router", None)
+        if router is None:
+            return
+        pos = None  # locate the position so we can quote its symbol
+        try:
+            for p in router.get_open_positions():
+                if int(p.get("trade_id", -1)) == int(trade_id):
+                    pos = p
+                    break
+        except Exception:
+            pos = None
+        if pos is None:
+            return
+        ltp = None
+        try:
+            tick = type(self.stream_worker).get_latest_tick(pos.get("symbol", ""))
+            if tick:
+                ltp = float(tick.get("ltp", 0.0)) or None
+        except Exception:
+            ltp = None
+        if not ltp:
+            try:
+                QMessageBox.warning(
+                    self, "Square-Off Blocked",
+                    f"No live quote available for {pos.get('symbol')}. "
+                    f"Position left open — the terminal will not fabricate an exit price."
+                )
+            except Exception:
+                pass
+            return
+        try:
+            res = router.close_position(int(trade_id), float(ltp))
+            status = res.get("status", "OK") if isinstance(res, dict) else "OK"
+            self._on_router_notification(
+                "Position Squared Off",
+                f"Trade {trade_id} closed at ₹{float(ltp):,.2f} ({status})."
+            )
+        except Exception as exc:
+            self._on_router_notification("Square-Off Failed", str(exc))
+        try:
+            self.portfolio_view.refresh_positions()
+            self.quick_trade._refresh_positions()
+        except Exception:
+            pass
+
     def _on_tick_received(self, tick: dict) -> None:
         """Ingests live exchange ticks into chart and index ticker cards."""
         self.chart_widget.on_tick_received(tick)
         sym = tick.get("symbol", "")
         ltp = float(tick.get("ltp", 0.0))
+        if ltp > 0 and not getattr(self, "_backfill_started", False):
+            # First genuine tick: the feed is demonstrably live, so request the
+            # real historical backfill once (never synthetic, never at boot).
+            self._backfill_started = True
+            try:
+                self.chart_widget.request_backfill(sym)
+            except Exception:
+                pass
         if ltp > 0:
-            self.top_bar.update_ticker(sym, ltp, 0.0)
+            # Fan the genuine tick out to the watch grid and scanner.
+            try:
+                self.market_watch_view.update_quote(
+                    sym, ltp,
+                    chg_pct=tick.get("chg_pct", tick.get("change_pct")),
+                    volume=tick.get("volume"),
+                )
+            except Exception:
+                pass
+            try:
+                self.scanner_panel.update_quote(sym, ltp)
+            except Exception:
+                pass
+        if ltp > 0:
+            # Real references only; absent fields render as an em dash.
+            self.top_bar.update_ticker(
+                sym,
+                ltp,
+                chg_pct=tick.get("chg_pct", tick.get("change_pct")),
+                prev_close=tick.get("prev_close", tick.get("previous_close")),
+            )
+
+    def _fetch_history_backfill(self, symbol: str, timeframe: str = "5m"):
+        """
+        Real market-data provider for the chart backfill (runs off the UI thread).
+
+        Returns an authentic OHLCV ``pandas.DataFrame`` or an empty frame when
+        the upstream source is unavailable. Nothing is ever synthesised here —
+        a funding/auth/network gap must leave the chart empty rather than fake.
+        """
+        import pandas as pd
+        try:
+            from core.time_machine import MonteCarloTimeMachine
+            period = {"1m": "7d", "5m": "60d", "15m": "60d", "1H": "60d",
+                      "4H": "60d", "1D": "1y"}.get(timeframe, "60d")
+            df = MonteCarloTimeMachine().fetch_historical_candles(symbol, period=period)
+            if df is None or not hasattr(df, "empty") or df.empty:
+                return pd.DataFrame()
+            return df.tail(240)
+        except Exception:
+            return pd.DataFrame()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Deterministic teardown: join backfill/stream threads before exit."""
+        try:
+            if hasattr(self, "chart_widget") and hasattr(self.chart_widget, "shutdown_backfill"):
+                self.chart_widget.shutdown_backfill()
+        except Exception:
+            pass
+        try:
+            sw = getattr(self, "stream_worker", None)
+            if sw is not None and sw.isRunning():
+                if hasattr(sw, "disconnect_stream"):
+                    sw.disconnect_stream()
+                sw.quit()
+                sw.wait(2000)
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
+        except Exception:
+            try:
+                event.accept()
+            except Exception:
+                pass
 
     def _on_connection_status(self, status: str, msg: str) -> None:
         """Updates health telemetry when broker connects or disconnects."""
         is_conn = (status == "CONNECTED")
+        measured_latency = self.stream_worker.get_dispatch_latency_ms() if is_conn else None
         self.system_health_card.update_telemetry(
             broker_connected=is_conn,
             broker_name=self.stream_worker.broker_name,
-            latency=self.stream_worker.get_dispatch_latency_ms() if is_conn else None
+            latency=measured_latency
         )
+        # Sidebar dock: live connection pulse + latency readout
+        if hasattr(self, "sidebar") and hasattr(self.sidebar, "set_connection_state"):
+            self.sidebar.set_connection_state(is_conn, measured_latency)
         # Update top bar latency pill
         if hasattr(self.top_bar, "update_latency"):
             try:

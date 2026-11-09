@@ -374,6 +374,8 @@ class StrategiesView(BasePageView):
 class MarketWatchView(BasePageView):
     """Page 4: Watchlist table for Nifty 50 anchors and MCX instruments."""
 
+    symbol_selected = Signal(str)   # row click / Trade button -> chart sync
+
     def __init__(self, parent=None) -> None:
         super().__init__("👁 LIVE MARKET WATCH (NSE & MCX)", "Real-time quote registry with zero ticker mutation and support for up to 20-character symbols.", parent)
         self._init_body()
@@ -391,35 +393,72 @@ class MarketWatchView(BasePageView):
         except Exception:
             pass
 
+        # Instrument registry only — every price cell boots EMPTY (Zero-Fake-Data)
+        # and is filled exclusively by genuine exchange ticks.
         watchlist = [
-            ("RELIANCE.NS", "2885", "NSE", "2,885.00", "+0.45%", "1,420,500"),
-            ("TCS.NS", "11536", "NSE", "3,850.50", "-0.20%", "650,200"),
-            ("HDFCBANK.NS", "1333", "NSE", "1,620.00", "+0.80%", "2,840,000"),
-            ("INFY.NS", "1594", "NSE", "1,780.25", "+1.15%", "1,950,400"),
-            ("TATAMOTORS.NS", "3456", "NSE", "985.40", "+1.85%", "3,400,100"),
-            ("ICICIBANK.NS", "4963", "NSE", "1,195.00", "+0.35%", "1,620,000"),
-            ("CRUDEOIL", "236901", "MCX", "6,150.00", "+0.95%", "85,400"),
-            ("GOLDM", "236902", "MCX", "74,500.00", "+0.30%", "24,800"),
-            ("SILVERM", "236903", "MCX", "88,200.00", "-0.15%", "18,900"),
-            ("TATASTEEL.NS", "3499", "NSE", "152.40", "+0.60%", "5,200,000")
+            ("RELIANCE.NS", "2885", "NSE"),
+            ("TCS.NS", "11536", "NSE"),
+            ("HDFCBANK.NS", "1333", "NSE"),
+            ("INFY.NS", "1594", "NSE"),
+            ("TATAMOTORS.NS", "3456", "NSE"),
+            ("ICICIBANK.NS", "4963", "NSE"),
+            ("CRUDEOIL", "236901", "MCX"),
+            ("GOLDM", "236902", "MCX"),
+            ("SILVERM", "236903", "MCX"),
+            ("TATASTEEL.NS", "3499", "NSE"),
         ]
 
-        for r, (sym, tok, ex, ltp, chg, vol) in enumerate(watchlist):
+        self.watch_table = table
+        self._watch_rows = {}
+
+        for r, (sym, tok, ex) in enumerate(watchlist):
             table.setItem(r, 0, QTableWidgetItem(sym))
             table.setItem(r, 1, QTableWidgetItem(tok))
             table.setItem(r, 2, QTableWidgetItem(ex))
-            table.setItem(r, 3, QTableWidgetItem(ltp))
-            
-            c_item = QTableWidgetItem(chg)
-            table.setItem(r, 4, c_item)
-            table.setItem(r, 5, QTableWidgetItem(vol))
+            table.setItem(r, 3, QTableWidgetItem("—"))
+            table.setItem(r, 4, QTableWidgetItem("—"))
+            table.setItem(r, 5, QTableWidgetItem("—"))
+            self._watch_rows[sym.upper()] = r
 
             btn = QPushButton("Trade", card)
             btn.setStyleSheet("background-color: #10b981; color: #060b13; font-weight: bold; padding: 2px 8px; border-radius: 4px; border: none;")
+            try:
+                btn.clicked.connect(lambda checked=False, sy=sym: self.symbol_selected.emit(sy))
+            except Exception:
+                pass
             table.setCellWidget(r, 6, btn)
+
+        try:
+            table.cellClicked.connect(
+                lambda r, c: self.symbol_selected.emit(table.item(r, 0).text())
+            )
+        except Exception:
+            pass
 
         cl.addWidget(table)
         self.layout_main.addWidget(card)
+
+    def update_quote(self, symbol: str, ltp: float, chg_pct=None, volume=None) -> None:
+        """Writes a genuine exchange tick into the watchlist row."""
+        row = getattr(self, "_watch_rows", {}).get(str(symbol).strip().upper())
+        if row is None:
+            return
+        try:
+            table = self.watch_table
+            table.setItem(row, 3, QTableWidgetItem(f"₹{float(ltp):,.2f}"))
+            if chg_pct is not None:
+                col = "#10b981" if float(chg_pct) >= 0 else "#ef4444"
+                item = QTableWidgetItem(f"{float(chg_pct):+.2f}%")
+                try:
+                    from PySide6.QtGui import QBrush, QColor
+                    item.setForeground(QBrush(QColor(col)))
+                except Exception:
+                    pass
+                table.setItem(row, 4, item)
+            if volume is not None:
+                table.setItem(row, 5, QTableWidgetItem(f"{float(volume):,.0f}"))
+        except Exception:
+            pass
 
 
 class AutoTradeView(BasePageView):
@@ -568,7 +607,9 @@ class AnalyticsView(BasePageView):
 
 
 class PortfolioView(BasePageView):
-    """Page 8: Capital allocation, margin utilization breakdown."""
+    """Page 8: Capital allocation, margin utilization breakdown, live positions."""
+
+    square_off_requested = Signal(int)   # trade_id -> router.close_position
 
     def __init__(self, parent=None) -> None:
         super().__init__("💼 PORTFOLIO & MARGIN ALLOCATION BREAKDOWN", "Autonomous capital-to-asset routing across Equity Cash, Nifty 50, and MCX Commodities.", parent)
@@ -600,6 +641,88 @@ class PortfolioView(BasePageView):
 
         cl.addWidget(table)
         self.layout_main.addWidget(card)
+
+        # ── Open positions with 1-click square-off ───────────────────────────
+        pos_card = QFrame(self.container)
+        pos_card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
+        pl = QVBoxLayout(pos_card)
+
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel("OPEN POSITIONS — 1-CLICK SQUARE-OFF", pos_card))
+        hdr.addStretch()
+        btn_sq_all = QPushButton("⚡ SQUARE OFF ALL", pos_card)
+        btn_sq_all.setStyleSheet("background-color: rgba(239, 68, 68, 0.18); color: #ef4444; font-weight: 800; border: 1px solid #ef4444; border-radius: 4px; padding: 4px 10px;")
+        try:
+            btn_sq_all.clicked.connect(self._on_square_off_all)
+        except Exception:
+            pass
+        hdr.addWidget(btn_sq_all)
+        pl.addLayout(hdr)
+
+        self.pos_table = QTableWidget(0, 7, pos_card)
+        self.pos_table.setHorizontalHeaderLabels(
+            ["Trade ID", "Symbol", "Side", "Qty", "Entry", "Status", "Action"]
+        )
+        try:
+            self.pos_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        except Exception:
+            pass
+        pl.addWidget(self.pos_table)
+        self.layout_main.addWidget(pos_card)
+
+    # ── Live data hooks ──────────────────────────────────────────────────────
+
+    def _router(self):
+        win = self.window()
+        return getattr(win, "order_router", None)
+
+    def refresh_positions(self) -> None:
+        """Rebuilds the positions grid from the live router state."""
+        router = self._router()
+        positions = []
+        if router is not None and hasattr(router, "get_open_positions"):
+            try:
+                positions = router.get_open_positions() or []
+            except Exception:
+                positions = []
+        try:
+            self.pos_table.setRowCount(len(positions))
+        except Exception:
+            return
+        for r, pos in enumerate(positions):
+            self.pos_table.setItem(r, 0, QTableWidgetItem(str(pos.get("trade_id", ""))))
+            self.pos_table.setItem(r, 1, QTableWidgetItem(str(pos.get("symbol", ""))))
+            self.pos_table.setItem(r, 2, QTableWidgetItem(str(pos.get("side", ""))))
+            self.pos_table.setItem(r, 3, QTableWidgetItem(str(pos.get("quantity", ""))))
+            self.pos_table.setItem(r, 4, QTableWidgetItem(f"₹{float(pos.get('entry_price', 0.0)):,.2f}"))
+            self.pos_table.setItem(r, 5, QTableWidgetItem(str(pos.get("status", ""))))
+
+            btn = QPushButton("Square-Off", self.pos_table)
+            btn.setStyleSheet("background-color: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 4px;")
+            try:
+                tid = int(pos.get("trade_id", 0))
+                btn.clicked.connect(lambda checked=False, t=tid: self.square_off_requested.emit(t))
+            except Exception:
+                pass
+            self.pos_table.setCellWidget(r, 6, btn)
+
+    def _on_square_off_all(self) -> None:
+        router = self._router()
+        if router is None:
+            return
+        prompt = "Square off every open position at the live market price?"
+        ok = True
+        try:
+            ok = QMessageBox.question(self, "Confirm Square-Off", prompt) == QMessageBox.Yes
+        except Exception:
+            ok = True
+        if not ok:
+            return
+        try:
+            router.auto_square_off_all(reason="MANUAL_SQUARE_OFF_ALL")
+        except Exception:
+            pass
+        self.refresh_positions()
 
 
 class RiskManagerView(BasePageView):
