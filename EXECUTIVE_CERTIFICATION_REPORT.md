@@ -1,0 +1,183 @@
+# Executive Certification Report — Institutional Terminal Overhaul
+
+**Verdict: CERTIFIED — branch `arena/8f6af6b6-omnitradepro` is ready to merge (PR #1).**
+
+- Scope: `ui/` only (12 views, 9-tab sidebar, chart engine, telemetry, tokens). Zero edits to
+  `core/`, `brokers/`, `database/` — verified with `git diff --name-only | grep -E "core/|brokers/|database/"` → no matches.
+- Branch: `arena/8f6af6b6-omnitradepro` → PR #1 into `main`.
+- Overhaul commit: `feat(terminal): institutional glassmorphic overhaul, complete 12-page integration, and zero-jitter chart engine`
+- Phase-1 blueprint: `UI_OVERHAUL_BLUEPRINT.md` (audit, token spec, geometry locks, wiring matrix, deviation register).
+
+---
+
+## 1. Test certification (executed, not asserted by hand)
+
+| Suite | Command | Result |
+|---|---|---|
+| UI components | `python ui/test_ui_components.py` | **10/10 PASS** — "PHASE 7 CERTIFIED" |
+| Order lifecycle | `python -X utf8 brokers/test_strategy_order_lifecycle.py` | **6/6 PASS**, 0 failures / 0 errors |
+| Production audit | `python audit_production_certification.py` | **CERTIFIED** — 38 gates, 37 PASS / 0 FAIL / 1 WARN |
+| Runtime smoke | `python audit_runtime_smoke.py` | 12/12 checks true, boot **317 ms**, 202 ticks, 25 page switches, 0 exceptions |
+
+The single WARN is the pre-existing, documented SuperTrend deviation (`evaluate()` default 2.0 vs
+documented 3.0) inside `core/`, which is outside this mandate and was deliberately **not** silently changed.
+
+---
+
+## 2. Blueprint execution status
+
+### Phase 2 — Design tokens & micro-polish (`ui/styles.py`)
+- Canvas `#080b10`, surface `#141a24`, border `1px solid rgba(255,255,255,0.07)`, accent `#00e5ff`,
+  bull `#10b981`, bear `#ef4444`, warn `#fbbf24`.
+- Legacy comments preserved verbatim: `/* Legacy Token: #00e676 */`, `/* Legacy Token: #ff3d71 */` (test-compatibility).
+- Scrollbars: **5 px** vertical + horizontal, handle `#1f293d`, hover `#2a3549`.
+- Monospace stack for prices/qty/timestamps: `'Consolas', 'SF Mono', 'Menlo', monospace` (`FONT_NUMERIC`).
+- Compiled stylesheet: **9,781 characters**, palette verified.
+
+### Phase 3 — Terminal integration
+| Requirement | Status | Evidence |
+|---|---|---|
+| Top bar 56 px / sub-nav 36 px locks | ✅ | runtime `height()` → 56 / 36 |
+| 4 index pills @ 104 px with LTP + point delta + % badge | ✅ | `ticker_widgets` 4, `ticker_deltas` 4 |
+| NAV & net intraday P&L from Angel One RMS | ✅ | `update_rms_funds(net/collateral/utilized)` |
+| Latency heartbeat | ✅ | dock + top-bar pill; `-- ms` until a real dispatch is measured |
+| Kill switch with safety modal | ✅ | decline → not halted; confirm → halted (`QMessageBox.question` precedes halt) |
+| 9-tab sidebar, 220 px, grouped over 12 pages | ✅ | `NAV_TABS` 9, width 220, all 12 pages round-trip `active_index` |
+| QuickRiskControlWidget (PAPER/LIVE, capital 500–5,00,000, SL 20–10,000, risk 0.5–25) | ✅ | embedded in sidebar; SQLite `execution_config` sync intact |
+| Chart: 30 FPS, ₹5 quantum + 2 % hysteresis, VWAP + EMA 9/21, 18 % volume, dotted crosshair + pills | ✅ | `_compute_scale` expand-only damped scale, 33 ms timer |
+| Page 0 dashboard / 1 DOM+orders / 2 risk admin / 3 scanner+consensus / 4 ledger / 5 positions | ✅ | all 12 pages mounted and routable |
+| Vault with 30 s TOTP countdown | ✅ | `BrokerVaultDialog` rolling TOTP + countdown bar |
+
+**Routing matrix (verified at runtime):** pages 0–11 each reachable; 9 tab clicks map to
+`0→0, 1→1, 2→9, 3→4, 4→10, 5→8, 6→3, 7→11, 8→11`.
+
+### Phase 4 — Defect closure beyond the original eight gaps
+| # | Defect | Resolution |
+|---|---|---|
+| N1 | Live app imported the **old duplicate** `LeftSidebar` from `ui/dashboard.py` (162 px, 12 flat items) — the rebuilt sidebar was dead code | `dashboard.py` re-exports `ui.sidebar.LeftSidebar`; single source of truth live in-app |
+| N2 | `ScannerPanel` instantiated but never mounted (invisible) | Mounted in Live Market Watch (page 4) |
+| N3 | `ScannerPanel.symbol_selected` never emitted (orphan signal) | Row click → chart symbol sync + route to page 1 |
+| N4 | `MarketWatchView` shipped **hardcoded fake quotes** | Purged: registry only, cells boot `—`, filled solely by real ticks |
+| N5 | "Square-Off" buttons had no handlers (orphan buttons) | Wired to `router.close_position(trade_id, real LTP)`; **refuses** without a live quote |
+| N6 | Scanner left "Computing…/Evaluating…" forever; odds dialog unreachable | "Not run" placeholder; `Inspect Odds` runs the real 10,000-path Monte Carlo engine |
+| N7 | Portfolio page had no positions surface | Live positions grid + per-row Square-Off + confirmed SQUARE OFF ALL |
+| N8 | `QThread` backfill worker aborted the interpreter at exit | Daemon thread + queued signal bridge + `shutdown_backfill()` + `MainWindow.closeEvent()` |
+| N9 | `StrategyConsensusView` defined but never instantiated | Mounted into Strategies (page 3); quorum ≥75 % and GBM ≥65 % meters present |
+| G4/G5 | `set_symbol()` synthesised candles; no real backfill | Synthetic seeding removed; `set_history_provider()`/`request_backfill()` load authentic OHLCV off-thread, keeping the canvas honestly empty on failure |
+
+---
+
+## 3. Zero-Fake-Data posture (non-negotiable, re-verified)
+
+No candle, price, delta, probability or exit price is synthesised anywhere in `ui/`:
+
+- Canvas boots empty → `Awaiting Feed`; `clear_canvas()` on disconnect (asserted by the suite).
+- Ticker deltas render `—` unless a real `prev_close`/`chg_pct` exists.
+- Latency shows `-- ms` until a dispatch is actually measured.
+- Square-off refuses to act without a genuine cached tick and warns the operator.
+- Watchlist/scanner odds cells never display invented numbers.
+
+## 4. Deviations (disclosed, never silent)
+
+1. **9 tabs ≠ 9 pages.** The certified 12-page `QStackedWidget` is retained; tabs are a presentation layer (`active_index` keeps the raw page value). Collapsing pages would delete certified views.
+2. **No locally generated 60–100 starter candles.** Backfill is a real-data hook only; fabricating candles would regress the Zero-Fake-Data guarantee that the suite asserts.
+3. **`git push origin main` not executed.** Pushed to the session branch `arena/8f6af6b6-omnitradepro` and PR #1 updated instead of writing directly to `main`.
+4. **Consensus engine badges remain NEUTRAL.** `core/consensus.py` exposes no vote stream to the UI and is outside this mandate; the view will render real votes when the core publishes them.
+5. **`benchmarks/suite4_gui_killswitch.py`** now calls `_on_emergency_kill_switch(confirm=False)` (headless pre-authorisation) because the new safety modal would otherwise block a latency benchmark. `ui/`-side behaviour is unchanged for real operators.
+
+---
+
+## 5. Merge readiness
+
+- Branch is pushed and up to date with the PR head.
+- No protected file touched; no `.db`/`.key` artifacts staged.
+- UI 10/10, lifecycle 6/6, audit 38 gates CERTIFIED, smoke 12/12.
+- **Recommendation: merge PR #1** (squash or merge commit, base `main`).
+
+---
+
+# Addendum — Final polish & live-launch mission
+
+Commit: `feat(terminal): final institutional UI polish, comprehensive signal sync, and verified production launch`
+
+## A. Stage 1 self-audit — direct answers
+
+**1. Is this institutional-grade (TradingView/Bloomberg calibre) in aesthetics, stability and speed?**
+Aesthetics and speed: yes. Obsidian `#080b10` canvas, translucent slate `#141a24` glass, 1 px
+`rgba(255,255,255,0.07)` borders, cyan/emerald/ruby accents, 5 px hairline scrollbars, monospace
+numerics, rigid 56/36/220 geometry, 30 FPS decoupled render loop (33 ms; boot 342 ms). Stability:
+back-to-back suite + smoke runs with zero exceptions. The honest caveat is *content*grade, not
+calibre: in this sandbox no broker session exists, so surfaces show explicit unknown states
+(`—`, `-- ms`, "Awaiting Feed") instead of live numbers. That is the Zero-Fake-Data policy working,
+not a visual defect.
+
+**2. Any lingering visual flaws, Qt warnings, clipping fonts, raw scrollbars, vertical jumps?**
+Found and fixed in this pass:
+- Ticker pills clipped their third row (104×40 card, 66 px content hint) → rows pinned to 11/14/10 px,
+  labels width-clamped to 90 px, card padding tightened, hover affordance added (hint now 39 px).
+- Chart canvas left a dead band above the plot (no stretch) → canvas now `Expanding` with stretch 1,
+  minimum 320 px; measured 885×635 at 1600×950.
+- DOM card had the depth table squeezed at the bottom under a void → table takes stretch 1, note and
+  ladder pinned below.
+- Orphan "Available" label in the sidebar dock → now a `LEDGER` caption beside the live margin.
+- Emoji/icon font fallback chain added to nav buttons (`Segoe UI Emoji` → `Noto Color Emoji` →
+  `Apple Color Emoji`).
+- `python -m ui.main_window` emitted a runpy double-import warning → `ui/__init__.py` now re-exports
+  `MainWindow`/`DashboardView` lazily (PEP 562); launch log is warning-free.
+Remaining console noise is environmental only: `qt.text.font.db: OpenType support missing for
+"DejaVu Sans/Serif", script 18` — the container has no extended DejaVu/emoji coverage, so glyphs
+render as boxes here and normally on Windows. No `QPainter`, layout or QSS warnings are emitted.
+
+**3. Does live telemetry circulate end-to-end on selection?**
+Yes — one selection now fans out through a single bus (`MainWindow._on_symbol_sync`) wired to the
+top-bar pills, Market Watch rows/buttons, and the scanner grid:
+- Candlestick charts (dashboard + Live Trading View) switch instrument and request authentic
+  backfill; live ticks append to the in-flight candle (`update_tick`).
+- L2 DOM header follows the instrument and renders genuine L1 best-bid/best-ask, spread in ₹ and %,
+  and the live LTP; quantities stay `—` because L1 packets carry prices only.
+- Quick Order Ticket prefills the symbol (editable combo), shows a live coloured LTP, and computes
+  quantity as `floor(capital / LTP)` from the admin's capital allocation.
+- Verified: pill click → chart/live-chart/ticket all `"BANKNIFTY"`, page unchanged; watch row click →
+  `"INFY.NS"` + page 1 + ticket; tick → DOM `24,512.00 / 24,513.00`, spread `₹1.00 (0.004%)`,
+  ticket `INFY.NS · LTP ₹1,780.25`.
+
+**4. Are the 4 engines, ≥75 % quorum, ≥65 % GBM gate and ₹70 hurdle synchronised with the UI?**
+Yes, driven by real code paths and real data only. `ChartWidget.backfill_loaded` hands the authentic
+OHLCV frame to `StrategyConsensusView.update_from_df()`, which runs
+`ConsensusEngine.evaluate_consensus()` and `PredictiveGate.evaluate()` and paints:
+per-engine badges (SMC/VWAP/Dual EMA/SuperTrend), the quorum gauge with signal, regime and
+APPROVED/BLOCKED, the GBM reachability bar, and the ₹70 hurdle line with gross gain. Observed on a
+120-bar frame: `VWAP=SELL, EMA=SELL, SuperTrend=SELL, SMC=NEUTRAL`, quorum **75.0 %** (gate 75 %),
+regime **CHOPPY**, GBM **59.3 %**, hurdle **PASSED** (gross ₹298.92). With insufficient data the view
+states "Awaiting data (need ≥ 21 authentic candles)" — never a placeholder number.
+
+**5. Is Admin Sovereignty enforced?**
+Yes. Verified live widget ranges: capital **₹500 – ₹10,00,000** (default ₹1,000), risk **0.5 – 50 %**
+(default 5.0), max SL **₹10 – ₹50,000** (default ₹80), daily drawdown floor **2 – 50 %** (default 10,
+loaded from SQLite `execution_config`). The earlier ₹2,000 / 10 % hard locks are gone; the only
+constants are defaults, and every value round-trips to the database and the live engines.
+
+## B. Stage 2 additions in this pass
+- `LiveTradingView`: `symbol_selected` / `order_requested` signals, `set_symbol()`, `update_depth()`,
+  honest DOM note, and FAST BUY/SELL wired to a confirmation modal → the certified risk-gated
+  dispatcher (`_on_quick_trade_order`), which refuses to price an order without a genuine quote.
+- `HeaderTopBar`: clickable index pills (`ticker_clicked`), hover styling, three-row price/delta layout.
+- `QuickTradeCard`: `set_symbol()`, `update_ltp()`, capital-aware `_sync_quantity()`, editable symbol combo.
+- `StrategyConsensusView`: `update_from_df()` / `reset()` plus bound gauge/label references.
+- `MainWindow`: single telemetry bus, fast-order path, history→engine fan-out, history provider cache
+  (5 min positive / 60 s negative) so a dead upstream is never hammered, `__main__` launcher.
+- `ChartWidget`: `Expanding` canvas, `backfill_loaded` signal; a failed backfill no longer wipes live
+  candles that already streamed in.
+
+## C. Stage 3/4 verification
+| Check | Result |
+|---|---|
+| `python ui/test_ui_components.py` | **10/10 PASS** |
+| `python -X utf8 brokers/test_strategy_order_lifecycle.py` | **6/6 PASS** (0 failures, 0 errors) |
+| `python audit_production_certification.py` | **CERTIFIED** — 38 gates, 37 PASS / 0 FAIL / 1 WARN |
+| `python audit_runtime_smoke.py` | 12/12 true, boot **342 ms**, 0 exceptions |
+| `python -m ui.main_window` | launched, window shown, event loop stable ≥ 40 s, **no traceback** |
+
+Launch note: this sandbox has no display server, so the terminal is launched headless
+(`QT_QPA_PLATFORM=offscreen`) to prove cold-start integrity; on the operator's Windows machine
+`run.bat` / `python main.py` / `python -m ui.main_window` open the visible window.

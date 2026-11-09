@@ -205,6 +205,26 @@ class ScannerPanel(QWidget):
 
         layout.addWidget(self.table)
 
+        # Row-click -> symbol sync with the primary chart (was an unlinked signal)
+        for _sig in ("cellClicked", "itemDoubleClicked"):
+            try:
+                getattr(self.table, _sig).connect(
+                    lambda r, c=0, *_: self._on_row_clicked(r)
+                )
+            except Exception:
+                pass
+
+    def update_quote(self, symbol: str, ltp: float, chg_pct=None) -> None:
+        """Refreshes a scanned row's LTP from a genuine exchange tick."""
+        try:
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item is not None and item.text().strip().upper() == symbol.strip().upper():
+                    self.table.setItem(row, 3, QTableWidgetItem(f"₹{float(ltp):,.2f}"))
+                    return
+        except Exception:
+            pass
+
     def run_scan(self) -> None:
         """Runs scan across watchlist and populates candidate table."""
         candidates = self.scanner.scan_watchlist(self.DEFAULT_WATCHLIST)
@@ -222,10 +242,74 @@ class ScannerPanel(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(f"₹{b_level:.2f}"))
             self.table.setItem(row, 3, QTableWidgetItem(f"₹{ltp:.2f}"))
             self.table.setItem(row, 4, QTableWidgetItem(vol))
-            self.table.setItem(row, 5, QTableWidgetItem("Computing..."))
-            self.table.setItem(row, 6, QTableWidgetItem("Evaluating..."))
+            # Zero-Fake-Data: odds are computed on demand by the real Monte
+            # Carlo engine; until then the cell states "Not run", not a number.
+            self.table.setItem(row, 5, QTableWidgetItem("Not run"))
+            self.table.setItem(row, 6, QTableWidgetItem(str(item.get("signal", "—") or "—")))
 
-            # Inspect odds button
+            # Inspect odds button -> real 10,000-path Monte Carlo replay
             btn_inspect = QPushButton("Inspect Odds", self)
             btn_inspect.setStyleSheet("background-color: rgba(0, 229, 255, 0.2); color: #00e5ff; font-weight: bold;")
+            try:
+                btn_inspect.clicked.connect(
+                    lambda checked=False, r=row: self._inspect_odds(r)
+                )
+            except Exception:
+                pass
             self.table.setCellWidget(row, 7, btn_inspect)
+
+    # ── Interaction ───────────────────────────────────────────────────────────
+
+    def _selected_symbol(self, row: int):
+        item = self.table.item(row, 0)
+        return item.text().strip() if item is not None else ""
+
+    def _on_row_clicked(self, row: int, column: int = 0) -> None:
+        """Row click publishes the symbol so the chart can sync to it."""
+        sym = self._selected_symbol(row)
+        if sym:
+            try:
+                self.symbol_selected.emit(sym)
+            except Exception:
+                pass
+
+    def _inspect_odds(self, row: int) -> None:
+        """
+        Runs the real Monte Carlo engine for the selected row and opens the
+        report dialog. Network/history failure surfaces an explicit error
+        instead of fabricated probabilities.
+        """
+        sym = self._selected_symbol(row)
+        if not sym:
+            return
+        ltp_item = self.table.item(row, 3)
+        try:
+            entry = float(str(ltp_item.text()).replace("₹", "").replace(",", "")) if ltp_item else 0.0
+        except Exception:
+            entry = 0.0
+        if entry <= 0.0:
+            self.table.setItem(row, 5, QTableWidgetItem("No live quote"))
+            return
+        try:
+            odds = self.time_machine.run_simulation(
+                sym, entry_price=entry,
+                stop_loss=entry * 0.99, target_price=entry * 1.02,
+            )
+        except Exception as exc:
+            self.table.setItem(row, 5, QTableWidgetItem(f"Engine error: {exc}"))
+            return
+        if not odds:
+            self.table.setItem(row, 5, QTableWidgetItem("Unavailable"))
+            return
+        try:
+            self.table.setItem(row, 5, QTableWidgetItem(f"{float(odds.get('target_hit_pct', 0.0)):.2f}%"))
+            self.table.setItem(row, 6, QTableWidgetItem(
+                "QUALIFIED" if odds.get("passes_odds_filter") else "REJECTED"
+            ))
+        except Exception:
+            pass
+        try:
+            dialog = MonteCarloOddsDialog(odds, self)
+            dialog.exec()
+        except Exception:
+            pass

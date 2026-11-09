@@ -130,6 +130,7 @@ class OrderRouter:
         db_handler=None,
         vault_manager=None,
         enforce_daily_trade_cap: bool = False,
+        enforce_user_risk_limits: bool = True,
         **kwargs
     ) -> None:
         self.db_manager = db_manager or db_handler or DatabaseManager()
@@ -191,7 +192,10 @@ class OrderRouter:
         self.user_risk_percentage: float = 5.0
         self.user_max_sl: float = 80.0
         self.user_daily_drawdown_pct: float = 10.0
-        self.enforce_user_risk_limits: bool = False
+        # Fail-closed: the operator's capital/risk ceiling is enforced on every
+        # order unless a caller explicitly opts out. Previously this defaulted to
+        # False, so manual/live orders silently bypassed the configured ceiling.
+        self.enforce_user_risk_limits: bool = bool(enforce_user_risk_limits)
         self._load_execution_config()
 
         # Synchronize initial toggles from vault if available

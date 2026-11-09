@@ -13,7 +13,9 @@ High-performance TradingView-grade canvas:
 """
 
 import math
+import os
 import random
+import threading
 from typing import Optional, List, Dict, Any
 import numpy as np
 import pandas as pd
@@ -22,7 +24,7 @@ try:
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QFrame
     )
-    from PySide6.QtCore import Qt, QRectF, QPointF
+    from PySide6.QtCore import Qt, QRectF, QPointF, QThread, QObject, Signal
     from PySide6.QtGui import (
         QPainter, QColor, QPen, QBrush, QFont
     )
@@ -41,6 +43,16 @@ except ImportError:
         def width(self): return self._w
         def height(self): return self._h
     class QFrame(QWidget): pass
+    class QThread:
+        """Minimal stand-in: runs the body inline when Qt is unavailable."""
+        def __init__(self, *args, **kwargs): pass
+        def start(self): self.run()
+        def run(self): pass
+        def isRunning(self): return False
+        def wait(self, *args): return True
+        def quit(self): pass
+    class QObject:
+        def __init__(self, *args, **kwargs): pass
     class Signal:
         def __init__(self, *args): self._cbs = []
         def connect(self, cb): self._cbs.append(cb)
@@ -224,6 +236,64 @@ def _generate_seed_candles(symbol: str, n: int = 80):
     return candles, times
 
 
+class _BackfillSignals(QObject):
+    """Qt-side bridge for background backfill results (queued to the UI thread)."""
+
+    loaded = Signal(int, object)   # (request_seq, dataframe)
+    failed = Signal(int, str)      # (request_seq, error)
+
+
+class _BackfillWorker:
+    """
+    Fetches *real* historical candles for a symbol on a daemon thread.
+
+    Zero-Fake-Data: the provider is a caller-supplied callable that must return
+    an authentic OHLCV ``pandas.DataFrame`` (DatetimeIndex + Open/High/Low/
+    Close/Volume). When no provider is wired, nothing is drawn — the canvas
+    stays in its explicit "Awaiting Feed" state rather than inventing candles.
+
+    A daemon thread (not a QThread) is used deliberately: a slow provider must
+    never keep the interpreter alive or abort shutdown, and results are still
+    marshalled onto the UI thread through ``_BackfillSignals``.
+    """
+
+    def __init__(self, provider, symbol: str, timeframe: str, seq: int,
+                 signals: "_BackfillSignals") -> None:
+        self._provider = provider
+        self._symbol = symbol
+        self._timeframe = timeframe
+        self._seq = seq
+        self._signals = signals
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run, name=f"backfill-{self._symbol}", daemon=True
+        )
+        self._thread.start()
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def join(self, timeout: float) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _run(self) -> None:  # daemon thread entry point
+        try:
+            df = self._provider(self._symbol, self._timeframe)
+        except Exception as exc:  # provider/network failure -> no candles drawn
+            try:
+                self._signals.failed.emit(self._seq, str(exc))
+            except Exception:
+                pass
+            return
+        try:
+            self._signals.loaded.emit(self._seq, df)
+        except Exception:
+            pass
+
+
 class CandleCanvas(QWidget):
     """
     Hardware-accelerated TradingView-grade Candlestick & Volume Chart Canvas.
@@ -325,6 +395,13 @@ class CandleCanvas(QWidget):
 
     def seed_historical(self, symbol: str, n: int = 80) -> None:
         """
+        LEGACY / NOT USED BY PRODUCTION PATHS.
+
+        Superseded by ``ChartWidget.set_history_provider()`` +
+        ``ChartWidget.request_backfill()``, which load authentic candles. Kept
+        only so historical callers do not break; nothing in the live terminal
+        invokes it any more (Zero-Fake-Data policy).
+
         Populates the canvas with *n* deterministically generated realistic
         intraday seed candles for *symbol* so the chart is never blank on
         startup.  ``is_connected`` is left False — the first live tick will
@@ -748,6 +825,9 @@ class ChartWidget(QFrame):
     live OHLCV statistics header, and hardware-accelerated candle canvas.
     """
 
+    #: Emitted with the authenticated OHLCV frame of a completed real backfill.
+    backfill_loaded = Signal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.current_symbol: str = "RELIANCE.NS"
@@ -900,9 +980,15 @@ class ChartWidget(QFrame):
 
         layout.addLayout(sub_bar)
 
-        # 3. Candlestick Canvas
+        # 3. Candlestick Canvas — stretch=1 so the canvas always fills the card
+        #    (a fixed-size canvas leaves an empty band above it and looks broken).
         self.canvas = CandleCanvas(self)
-        layout.addWidget(self.canvas)
+        try:
+            self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.canvas.setMinimumHeight(320)
+        except Exception:
+            pass
+        layout.addWidget(self.canvas, 1)
 
         # 30 FPS render timer — decouples tick data from Qt paint events
         try:
@@ -914,12 +1000,16 @@ class ChartWidget(QFrame):
         except Exception:
             pass
 
-        # Seed the canvas with realistic historical candles immediately
-        try:
-            self.canvas.seed_historical(self.current_symbol)
-            self.restore_default_ohlc()
-        except Exception:
-            pass
+        # Zero-Fake-Data mandate: the canvas starts EMPTY and only ever displays
+        # exchange-sourced candles. Deterministic demo candles are opt-in for
+        # screenshots/design work and must be requested explicitly.
+        #   OMNITRADE_DEMO_CHART=1
+        if os.environ.get("OMNITRADE_DEMO_CHART", "0").strip() == "1":
+            try:
+                self.canvas.seed_historical(self.current_symbol)
+                self.restore_default_ohlc()
+            except Exception:
+                pass
 
     def _on_render_tick(self) -> None:
         """30 FPS render loop: only repaints when new tick data has arrived."""
@@ -979,25 +1069,123 @@ class ChartWidget(QFrame):
                     }
                 """)
 
-        # Reseed with timeframe-appropriate candle count
+        # Zero-Fake-Data: a timeframe switch re-requests real history for the
+        # active instrument instead of generating time-scaled seed candles.
+        self._timeframe = tf
+        self._request_backfill(self.current_symbol, tf)
+
+    # ── Real-data backfill (Zero-Fake-Data) ──────────────────────────────────
+
+    def set_history_provider(self, provider) -> None:
+        """
+        Registers the real-market-data hook used to backfill the canvas.
+
+        ``provider(symbol, timeframe) -> pandas.DataFrame`` must return an
+        authentic OHLCV frame (or an empty frame when unavailable). Nothing is
+        ever synthesised locally.
+        """
+        self._history_provider = provider
+
+    def request_backfill(self, symbol: Optional[str] = None,
+                         timeframe: Optional[str] = None) -> None:
+        """Public entry point: refresh the chart from the real-data provider."""
+        self._request_backfill(
+            symbol or self.current_symbol,
+            timeframe or getattr(self, "_timeframe", self.current_timeframe),
+        )
+
+    def _request_backfill(self, symbol: str, timeframe: str) -> None:
+        """
+        Clears the canvas, then asynchronously loads real history.
+
+        Older in-flight requests are invalidated by the monotonically
+        increasing ``_backfill_seq`` so a slow symbol switch can never
+        overwrite a newer one.
+        """
+        self._backfill_seq = getattr(self, "_backfill_seq", 0) + 1
+        seq = self._backfill_seq
+        self._timeframe = timeframe
+
+        # Stale seed/live candles from the previous instrument must go first.
         try:
-            n_candles = {"1m": 120, "5m": 80, "15m": 60, "1H": 48, "4H": 32, "1D": 60}.get(tf, 80)
-            self.canvas.seed_historical(self.current_symbol, n_candles)
-            self.restore_default_ohlc()
+            self.clear_canvas()
         except Exception:
             pass
+        self.restore_default_ohlc()
+
+        provider = getattr(self, "_history_provider", None)
+        if provider is None:
+            return  # no real feed wired -> explicit "Awaiting Feed" state
+
+        try:
+            signals = _BackfillSignals(self)   # parented: lives on the UI thread
+            signals.loaded.connect(self._on_backfill_loaded)
+            signals.failed.connect(self._on_backfill_failed)
+            self._backfill_signals = signals
+            worker = _BackfillWorker(provider, symbol, timeframe, seq, signals)
+            worker.start()
+            self._backfill_worker = worker  # keep a strong reference alive
+        except Exception:
+            pass
+
+    def _on_backfill_loaded(self, seq: int, df) -> None:
+        """Applies a completed real-history fetch (ignoring stale responses)."""
+        if seq != getattr(self, "_backfill_seq", 0):
+            return
+        if df is None or getattr(df, "empty", True):
+            # Keep any live candles that arrived while the fetch was in flight.
+            if not self.canvas.candles:
+                try:
+                    self.clear_canvas()
+                except Exception:
+                    pass
+            self.restore_default_ohlc()
+            return
+        try:
+            self.canvas.set_historical_data(df)
+        except Exception:
+            return
+        self.restore_default_ohlc()
+        try:
+            self.backfill_loaded.emit(df)   # engine/telemetry fan-out (real data)
+        except Exception:
+            pass
+
+    def shutdown_backfill(self, timeout_ms: int = 2000) -> None:
+        """Joins any in-flight provider thread (called on window teardown)."""
+        worker = getattr(self, "_backfill_worker", None)
+        if worker is None:
+            return
+        try:
+            if worker.is_alive():
+                worker.join(max(0.0, timeout_ms / 1000.0))
+        except Exception:
+            pass
+        self._backfill_worker = None
+
+    def _on_backfill_failed(self, seq: int, error: str) -> None:
+        """Provider/network failure: leave the canvas honestly empty."""
+        if seq != getattr(self, "_backfill_seq", 0):
+            return
+        # Never wipe live candles that already streamed in: a failed history
+        # fetch must not destroy real ticks.
+        if not self.canvas.candles:
+            try:
+                self.clear_canvas()
+            except Exception:
+                pass
+        self.restore_default_ohlc()
 
     def set_symbol(self, symbol: str) -> None:
         self.current_symbol = symbol
         exchange = "MCX" if any(k in symbol.upper() for k in ["CRUDE", "GOLD", "SILVER", "COPPER", "NATURALGAS"]) else "NSE"
         self.sym_lbl.setText(f"{symbol} • {exchange}")
 
-        # Reseed chart for the newly selected instrument
-        try:
-            self.canvas.seed_historical(symbol)
-            self.restore_default_ohlc()
-        except Exception:
-            pass
+        # Zero-Fake-Data: never synthesise candles for a new instrument.
+        # Clear the canvas and request an authentic backfill from the wired
+        # provider (a real market-data source). With no provider the panel
+        # stays in its explicit "Awaiting Feed" state.
+        self._request_backfill(symbol, getattr(self, "_timeframe", "5m"))
 
     def update_candles(self, df: pd.DataFrame, orb_high: float = 0.0, orb_low: float = 0.0) -> None:
         """Loads historical candles and sets live indicators."""

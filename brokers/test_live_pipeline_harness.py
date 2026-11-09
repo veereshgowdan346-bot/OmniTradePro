@@ -337,7 +337,10 @@ class TestLiveBrokerPipelineHarness(unittest.TestCase):
         print("\n▶ 4. ORDER ROUTER PRE-FLIGHT MARGIN GUARD, SLIPPAGE & RISK GUARD")
         print("  " + "-" * 76)
 
-        router = OrderRouter(vault_manager=self.vault, enforce_daily_trade_cap=True)
+        # This dimension exercises the MARGIN-PREFLIGHT subsystem, so the
+        # operator capital ceiling is opted out to let that path be reached.
+        router = OrderRouter(vault_manager=self.vault, enforce_daily_trade_cap=True,
+                             enforce_user_risk_limits=False)
 
         # 1. Pre-Flight Margin Check: MCX Crude Oil Futures (Requires min ₹1.5L)
         # Case A: Low capital (₹50,000) without auto-reroute -> REJECTED

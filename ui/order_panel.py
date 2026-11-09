@@ -274,4 +274,39 @@ class OrderPanel(QWidget):
 
             btn_exit = QPushButton("Square-Off", self)
             btn_exit.setStyleSheet("background-color: rgba(213, 0, 0, 0.4); color: #ff3d71; font-weight: bold;")
+            # Previously an orphan button: now closes the position at its real
+            # live LTP (never a fabricated exit price).
+            try:
+                btn_exit.clicked.connect(
+                    lambda checked=False, t=pos["trade_id"], sym=pos["symbol"]: self._square_off(t, sym)
+                )
+            except Exception:
+                pass
             self.pos_table.setCellWidget(row, 6, btn_exit)
+
+    def _square_off(self, trade_id, symbol: str) -> None:
+        """One-click square-off using the genuine cached tick price."""
+        ltp = None
+        try:
+            from brokers.stream_worker import BrokerStreamWorker
+            tick = BrokerStreamWorker.get_latest_tick(symbol)
+            if tick:
+                ltp = float(tick.get("ltp", 0.0)) or None
+        except Exception:
+            ltp = None
+        if not ltp:
+            try:
+                self.risk_badge.setText(f"SQUARE-OFF BLOCKED: no live quote for {symbol}")
+                self.risk_badge.setStyleSheet("color: #ff3d71; font-weight: bold;")
+            except Exception:
+                pass
+            return
+        try:
+            self.router.close_position(int(trade_id), float(ltp))
+            self._refresh_positions()
+        except Exception as exc:
+            try:
+                self.risk_badge.setText(f"SQUARE-OFF ERROR: {exc}")
+                self.risk_badge.setStyleSheet("color: #ff3d71; font-weight: bold;")
+            except Exception:
+                pass

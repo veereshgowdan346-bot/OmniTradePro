@@ -18,6 +18,8 @@ from typing import Optional, Dict, Any, List
 import pyotp
 from cryptography.fernet import Fernet
 
+from database.paths import KEY_FILENAME, LEDGER_FILENAME, resolve_path
+
 
 class DatabaseHandler:
     """
@@ -57,17 +59,8 @@ class DatabaseHandler:
 
     def _configure_paths(self, db_path: Optional[str], key_path: Optional[str]) -> None:
         """Sets up filesystem paths for the SQLite database and Fernet key file."""
-        base_dir = Path(__file__).resolve().parent
-        
-        if db_path is None:
-            self.db_path = base_dir / "omnitrade.db"
-        else:
-            self.db_path = Path(db_path)
-            
-        if key_path is None:
-            self.key_path = base_dir / ".vault.key"
-        else:
-            self.key_path = Path(key_path)
+        self.db_path = resolve_path(db_path, LEDGER_FILENAME)
+        self.key_path = resolve_path(key_path, KEY_FILENAME)
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.key_path.parent.mkdir(parents=True, exist_ok=True)

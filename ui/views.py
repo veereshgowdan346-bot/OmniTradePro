@@ -203,6 +203,9 @@ class BasePageView(QScrollArea):
 class LiveTradingView(BasePageView):
     """Page 1: Full-height candlestick chart, DOM depth, fast buy/sell ladder."""
 
+    symbol_selected = Signal(str)   # instrument requested from this page
+    order_requested = Signal(dict)  # fast ladder -> risk-gated dispatch
+
     def __init__(self, parent=None) -> None:
         super().__init__("📈 LIVE TRADING & DEPTH OF MARKET (DOM)", "High-frequency chart canvas, Level 2 orderbook depth, and fast execution ladder.", parent)
         self._init_body()
@@ -222,9 +225,13 @@ class LiveTradingView(BasePageView):
         dl = QVBoxLayout(dom_card)
         dl.setSpacing(8)
 
-        lbl_dom = QLabel("DEPTH OF MARKET (L2)", dom_card)
-        lbl_dom.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
-        dl.addWidget(lbl_dom)
+        self.dom_title = QLabel("DEPTH OF MARKET (L2) · —", dom_card)
+        self.dom_title.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
+        dl.addWidget(self.dom_title)
+
+        self.dom_spread = QLabel("Spread: —   |   L1 stream: awaiting broker feed", dom_card)
+        self.dom_spread.setStyleSheet("color: #64748b; font-size: 10px; font-family: 'Consolas', monospace;")
+        dl.addWidget(self.dom_spread)
 
         dom_table = QTableWidget(5, 4, dom_card)
         dom_table.setHorizontalHeaderLabels(["Bids", "Qty", "Asks", "Qty"])
@@ -252,16 +259,33 @@ class LiveTradingView(BasePageView):
         except Exception:
             pass
 
-        bids = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
-        asks = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
+        self.dom_table = dom_table
 
+        # Zero-Fake-Data: every level boots as an em dash. Level 1 is filled from
+        # the broker's genuine best-bid/best-ask; deeper levels stay unknown
+        # until the feed publishes them.
         for r in range(5):
-            dom_table.setItem(r, 0, QTableWidgetItem(bids[r][0]))
-            dom_table.setItem(r, 1, QTableWidgetItem(bids[r][1]))
-            dom_table.setItem(r, 2, QTableWidgetItem(asks[r][0]))
-            dom_table.setItem(r, 3, QTableWidgetItem(asks[r][1]))
+            for c in range(4):
+                item = QTableWidgetItem("—")
+                try:
+                    from PySide6.QtGui import QBrush, QColor
+                    item.setForeground(QBrush(QColor("#475569")))
+                except Exception:
+                    pass
+                dom_table.setItem(r, c, item)
 
-        dl.addWidget(dom_table)
+        # Table owns the vertical space (stretch=1) so the card never shows a
+        # dead band between the quote strip and the depth ladder.
+        dl.addWidget(dom_table, 1)
+
+        # Honest scope note: the broker feed exposes L1 only today.
+        self.dom_note = QLabel(
+            "L1 (best bid/ask) streams live. Levels 2–5 render when the broker\n"
+            "feed publishes size — no level is ever simulated.",
+            dom_card,
+        )
+        self.dom_note.setStyleSheet("color: #475569; font-size: 9px; line-height: 13px;")
+        dl.addWidget(self.dom_note)
 
         # Fast Execution Ladder
         ladder_layout = QHBoxLayout()
@@ -275,8 +299,84 @@ class LiveTradingView(BasePageView):
         ladder_layout.addWidget(btn_fs)
         dl.addLayout(ladder_layout)
 
+        # Fast ladder -> risk-gated market dispatch for the charted instrument.
+        self.btn_fast_buy = btn_fb
+        self.btn_fast_sell = btn_fs
+        try:
+            btn_fb.clicked.connect(lambda: self._emit_fast_order("BUY"))
+            btn_fs.clicked.connect(lambda: self._emit_fast_order("SELL"))
+        except Exception:
+            pass
+
         split_layout.addWidget(dom_card, 30)
-        self.layout_main.addLayout(split_layout)
+        self.layout_main.addLayout(split_layout, 1)   # chart page owns the height
+
+    # ── Live telemetry API ───────────────────────────────────────────────────
+
+    def set_symbol(self, symbol: str) -> None:
+        """Syncs the chart + DOM header to a newly selected instrument."""
+        if not symbol:
+            return
+        try:
+            self.chart.set_symbol(symbol)
+        except Exception:
+            pass
+        try:
+            self.dom_title.setText(f"DEPTH OF MARKET (L2) · {symbol}")
+            self.dom_spread.setText("Spread: —   |   L1 stream: awaiting broker feed")
+            for r in range(5):
+                for c in range(4):
+                    self.dom_table.setItem(r, c, QTableWidgetItem("—"))
+        except Exception:
+            pass
+
+    def update_depth(self, symbol: str, best_bid=None, best_ask=None, ltp=None) -> None:
+        """
+        Renders the broker's genuine Level-1 quote as DOM row 0.
+
+        Deeper levels are left as em dashes: the terminal must not invent size.
+        """
+        try:
+            if symbol and symbol.strip().upper() not in self.dom_title.text().upper():
+                return
+            bb = float(best_bid) if best_bid else None
+            ba = float(best_ask) if best_ask else None
+            if bb:
+                self.dom_table.item(0, 0).setText(f"{bb:,.2f}")
+            if ba:
+                self.dom_table.item(0, 2).setText(f"{ba:,.2f}")
+            # Quantity columns remain em dashes: L1 packets carry prices only,
+            # and the terminal never invents size.
+            if bb and ba and bb > 0 and ba > 0:
+                spread = ba - bb
+                self.dom_spread.setText(
+                    f"Spread: ₹{spread:,.2f} ({spread / bb * 100.0:.3f}%)   |   "
+                    f"L1 LIVE   |   LTP: ₹{float(ltp):,.2f}" if ltp else
+                    f"Spread: ₹{spread:,.2f} ({spread / bb * 100.0:.3f}%)   |   L1 LIVE"
+                )
+        except Exception:
+            pass
+
+    def _emit_fast_order(self, side: str) -> None:
+        """Publishes a fast-ladder market order for the currently charted symbol."""
+        try:
+            symbol = getattr(self.chart, "current_symbol", "") or ""
+        except Exception:
+            symbol = ""
+        if not symbol:
+            return
+        # One unit: the router's uniform lot sizer and risk budget own the final
+        # quantity, so the ladder never guesses position size on its own.
+        try:
+            self.order_requested.emit({
+                "symbol": symbol,
+                "side": side,
+                "quantity": 1,
+                "order_type": "MARKET",
+                "product": "INTRADAY",
+            })
+        except Exception:
+            pass
 
 
 class TradingBotsView(BasePageView):
@@ -374,6 +474,8 @@ class StrategiesView(BasePageView):
 class MarketWatchView(BasePageView):
     """Page 4: Watchlist table for Nifty 50 anchors and MCX instruments."""
 
+    symbol_selected = Signal(str)   # row click / Trade button -> chart sync
+
     def __init__(self, parent=None) -> None:
         super().__init__("👁 LIVE MARKET WATCH (NSE & MCX)", "Real-time quote registry with zero ticker mutation and support for up to 20-character symbols.", parent)
         self._init_body()
@@ -391,35 +493,72 @@ class MarketWatchView(BasePageView):
         except Exception:
             pass
 
+        # Instrument registry only — every price cell boots EMPTY (Zero-Fake-Data)
+        # and is filled exclusively by genuine exchange ticks.
         watchlist = [
-            ("RELIANCE.NS", "2885", "NSE", "2,885.00", "+0.45%", "1,420,500"),
-            ("TCS.NS", "11536", "NSE", "3,850.50", "-0.20%", "650,200"),
-            ("HDFCBANK.NS", "1333", "NSE", "1,620.00", "+0.80%", "2,840,000"),
-            ("INFY.NS", "1594", "NSE", "1,780.25", "+1.15%", "1,950,400"),
-            ("TATAMOTORS.NS", "3456", "NSE", "985.40", "+1.85%", "3,400,100"),
-            ("ICICIBANK.NS", "4963", "NSE", "1,195.00", "+0.35%", "1,620,000"),
-            ("CRUDEOIL", "236901", "MCX", "6,150.00", "+0.95%", "85,400"),
-            ("GOLDM", "236902", "MCX", "74,500.00", "+0.30%", "24,800"),
-            ("SILVERM", "236903", "MCX", "88,200.00", "-0.15%", "18,900"),
-            ("TATASTEEL.NS", "3499", "NSE", "152.40", "+0.60%", "5,200,000")
+            ("RELIANCE.NS", "2885", "NSE"),
+            ("TCS.NS", "11536", "NSE"),
+            ("HDFCBANK.NS", "1333", "NSE"),
+            ("INFY.NS", "1594", "NSE"),
+            ("TATAMOTORS.NS", "3456", "NSE"),
+            ("ICICIBANK.NS", "4963", "NSE"),
+            ("CRUDEOIL", "236901", "MCX"),
+            ("GOLDM", "236902", "MCX"),
+            ("SILVERM", "236903", "MCX"),
+            ("TATASTEEL.NS", "3499", "NSE"),
         ]
 
-        for r, (sym, tok, ex, ltp, chg, vol) in enumerate(watchlist):
+        self.watch_table = table
+        self._watch_rows = {}
+
+        for r, (sym, tok, ex) in enumerate(watchlist):
             table.setItem(r, 0, QTableWidgetItem(sym))
             table.setItem(r, 1, QTableWidgetItem(tok))
             table.setItem(r, 2, QTableWidgetItem(ex))
-            table.setItem(r, 3, QTableWidgetItem(ltp))
-            
-            c_item = QTableWidgetItem(chg)
-            table.setItem(r, 4, c_item)
-            table.setItem(r, 5, QTableWidgetItem(vol))
+            table.setItem(r, 3, QTableWidgetItem("—"))
+            table.setItem(r, 4, QTableWidgetItem("—"))
+            table.setItem(r, 5, QTableWidgetItem("—"))
+            self._watch_rows[sym.upper()] = r
 
             btn = QPushButton("Trade", card)
             btn.setStyleSheet("background-color: #10b981; color: #060b13; font-weight: bold; padding: 2px 8px; border-radius: 4px; border: none;")
+            try:
+                btn.clicked.connect(lambda checked=False, sy=sym: self.symbol_selected.emit(sy))
+            except Exception:
+                pass
             table.setCellWidget(r, 6, btn)
+
+        try:
+            table.cellClicked.connect(
+                lambda r, c: self.symbol_selected.emit(table.item(r, 0).text())
+            )
+        except Exception:
+            pass
 
         cl.addWidget(table)
         self.layout_main.addWidget(card)
+
+    def update_quote(self, symbol: str, ltp: float, chg_pct=None, volume=None) -> None:
+        """Writes a genuine exchange tick into the watchlist row."""
+        row = getattr(self, "_watch_rows", {}).get(str(symbol).strip().upper())
+        if row is None:
+            return
+        try:
+            table = self.watch_table
+            table.setItem(row, 3, QTableWidgetItem(f"₹{float(ltp):,.2f}"))
+            if chg_pct is not None:
+                col = "#10b981" if float(chg_pct) >= 0 else "#ef4444"
+                item = QTableWidgetItem(f"{float(chg_pct):+.2f}%")
+                try:
+                    from PySide6.QtGui import QBrush, QColor
+                    item.setForeground(QBrush(QColor(col)))
+                except Exception:
+                    pass
+                table.setItem(row, 4, item)
+            if volume is not None:
+                table.setItem(row, 5, QTableWidgetItem(f"{float(volume):,.0f}"))
+        except Exception:
+            pass
 
 
 class AutoTradeView(BasePageView):
@@ -568,7 +707,9 @@ class AnalyticsView(BasePageView):
 
 
 class PortfolioView(BasePageView):
-    """Page 8: Capital allocation, margin utilization breakdown."""
+    """Page 8: Capital allocation, margin utilization breakdown, live positions."""
+
+    square_off_requested = Signal(int)   # trade_id -> router.close_position
 
     def __init__(self, parent=None) -> None:
         super().__init__("💼 PORTFOLIO & MARGIN ALLOCATION BREAKDOWN", "Autonomous capital-to-asset routing across Equity Cash, Nifty 50, and MCX Commodities.", parent)
@@ -600,6 +741,88 @@ class PortfolioView(BasePageView):
 
         cl.addWidget(table)
         self.layout_main.addWidget(card)
+
+        # ── Open positions with 1-click square-off ───────────────────────────
+        pos_card = QFrame(self.container)
+        pos_card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
+        pl = QVBoxLayout(pos_card)
+
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel("OPEN POSITIONS — 1-CLICK SQUARE-OFF", pos_card))
+        hdr.addStretch()
+        btn_sq_all = QPushButton("⚡ SQUARE OFF ALL", pos_card)
+        btn_sq_all.setStyleSheet("background-color: rgba(239, 68, 68, 0.18); color: #ef4444; font-weight: 800; border: 1px solid #ef4444; border-radius: 4px; padding: 4px 10px;")
+        try:
+            btn_sq_all.clicked.connect(self._on_square_off_all)
+        except Exception:
+            pass
+        hdr.addWidget(btn_sq_all)
+        pl.addLayout(hdr)
+
+        self.pos_table = QTableWidget(0, 7, pos_card)
+        self.pos_table.setHorizontalHeaderLabels(
+            ["Trade ID", "Symbol", "Side", "Qty", "Entry", "Status", "Action"]
+        )
+        try:
+            self.pos_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        except Exception:
+            pass
+        pl.addWidget(self.pos_table)
+        self.layout_main.addWidget(pos_card)
+
+    # ── Live data hooks ──────────────────────────────────────────────────────
+
+    def _router(self):
+        win = self.window()
+        return getattr(win, "order_router", None)
+
+    def refresh_positions(self) -> None:
+        """Rebuilds the positions grid from the live router state."""
+        router = self._router()
+        positions = []
+        if router is not None and hasattr(router, "get_open_positions"):
+            try:
+                positions = router.get_open_positions() or []
+            except Exception:
+                positions = []
+        try:
+            self.pos_table.setRowCount(len(positions))
+        except Exception:
+            return
+        for r, pos in enumerate(positions):
+            self.pos_table.setItem(r, 0, QTableWidgetItem(str(pos.get("trade_id", ""))))
+            self.pos_table.setItem(r, 1, QTableWidgetItem(str(pos.get("symbol", ""))))
+            self.pos_table.setItem(r, 2, QTableWidgetItem(str(pos.get("side", ""))))
+            self.pos_table.setItem(r, 3, QTableWidgetItem(str(pos.get("quantity", ""))))
+            self.pos_table.setItem(r, 4, QTableWidgetItem(f"₹{float(pos.get('entry_price', 0.0)):,.2f}"))
+            self.pos_table.setItem(r, 5, QTableWidgetItem(str(pos.get("status", ""))))
+
+            btn = QPushButton("Square-Off", self.pos_table)
+            btn.setStyleSheet("background-color: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 4px;")
+            try:
+                tid = int(pos.get("trade_id", 0))
+                btn.clicked.connect(lambda checked=False, t=tid: self.square_off_requested.emit(t))
+            except Exception:
+                pass
+            self.pos_table.setCellWidget(r, 6, btn)
+
+    def _on_square_off_all(self) -> None:
+        router = self._router()
+        if router is None:
+            return
+        prompt = "Square off every open position at the live market price?"
+        ok = True
+        try:
+            ok = QMessageBox.question(self, "Confirm Square-Off", prompt) == QMessageBox.Yes
+        except Exception:
+            ok = True
+        if not ok:
+            return
+        try:
+            router.auto_square_off_all(reason="MANUAL_SQUARE_OFF_ALL")
+        except Exception:
+            pass
+        self.refresh_positions()
 
 
 class RiskManagerView(BasePageView):
@@ -1054,6 +1277,9 @@ class StrategyConsensusView(BasePageView):
             ("SuperTrend Gate", "🟣", "#818cf8", "ATR-based directional filter with trailing stop floor."),
         ]
 
+        self._engine_badges = {}
+        self._engine_meta = {}
+
         for name, dot, accent, desc in engine_data:
             card = QFrame(self.container)
             card.setStyleSheet(f"""
@@ -1090,6 +1316,9 @@ class StrategyConsensusView(BasePageView):
             except Exception:
                 pass
             cl.addWidget(signal_lbl)
+
+            self._engine_badges[name] = signal_lbl
+            self._engine_meta[name] = (accent, desc)
 
             # Confidence bar
             conf_bar = QProgressBar(card)
@@ -1169,10 +1398,12 @@ class StrategyConsensusView(BasePageView):
             }
         """)
         ql.addWidget(quorum_bar)
+        self.quorum_bar = quorum_bar
 
         quorum_status = QLabel("Status: Awaiting live strategy feed", quorum_card)
         quorum_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
         ql.addWidget(quorum_status)
+        self.quorum_status = quorum_status
         gate_layout.addWidget(quorum_card, 60)
 
         # Predictive Gate Card
@@ -1218,14 +1449,134 @@ class StrategyConsensusView(BasePageView):
             }
         """)
         pl.addWidget(pred_bar)
+        self.pred_bar = pred_bar
 
         hurdle_lbl = QLabel("₹70 Net Hurdle: AWAITING SIGNAL", pred_card)
         hurdle_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600; font-family: 'Consolas', monospace;")
         pl.addWidget(hurdle_lbl)
+        self.hurdle_lbl = hurdle_lbl
         gate_layout.addWidget(pred_card, 40)
 
         self.layout_main.addLayout(gate_layout)
         self.layout_main.addStretch()
+
+    # ── Live engine telemetry (real core engines, real candles) ──────────────
+
+    _VOTE_STYLE = {
+        1: ("BUY", "#10b981", "rgba(16, 185, 129, 0.15)", "rgba(16, 185, 129, 0.55)"),
+        -1: ("SELL", "#ef4444", "rgba(239, 68, 68, 0.15)", "rgba(239, 68, 68, 0.55)"),
+        0: ("NEUTRAL", "#94a3b8", "rgba(100, 116, 139, 0.15)", "rgba(100, 116, 139, 0.4)"),
+    }
+
+    def _paint_badge(self, name: str, vote: int) -> None:
+        lbl = self._engine_badges.get(name)
+        if lbl is None:
+            return
+        text, color, bg, border = self._VOTE_STYLE.get(int(vote), self._VOTE_STYLE[0])
+        try:
+            lbl.setText(text)
+            lbl.setStyleSheet(
+                f"background-color: {bg}; border: 1px solid {border}; border-radius: 4px; "
+                f"color: {color}; font-size: 12px; font-weight: 800; padding: 4px 10px;"
+            )
+        except Exception:
+            pass
+
+    def update_from_df(self, df, symbol: str = "") -> None:
+        """
+        Runs the real core engines over authentic candles and paints the matrix.
+
+        Nothing is estimated here: the votes, the quorum score, the regime and the
+        GBM probability all come from ``core.strategies`` / ``core.consensus`` /
+        ``core.predictive_gate``. With insufficient data every badge stays NEUTRAL
+        and the gauges read "Awaiting data".
+        """
+        try:
+            import pandas as pd  # local import: UI must stay importable without pandas
+            from core.consensus import ConsensusEngine
+            from core.predictive_gate import PredictiveGate
+        except Exception:
+            return
+        if df is None or getattr(df, "empty", True) or len(df) < 21:
+            try:
+                self.quorum_status.setText(
+                    "Status: Awaiting data (need ≥ 21 authentic candles)"
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            result = ConsensusEngine.evaluate_consensus(df)
+        except Exception as exc:
+            try:
+                self.quorum_status.setText(f"Engine error: {exc}")
+            except Exception:
+                pass
+            return
+
+        breakdown = result.get("breakdown", {}) or {}
+        self._paint_badge("SMC Liquidity Grab", breakdown.get("smc", 0))
+        self._paint_badge("Institutional VWAP", breakdown.get("vwap", 0))
+        self._paint_badge("Dual EMA 9/21", breakdown.get("ema", 0))
+        self._paint_badge("SuperTrend Gate", breakdown.get("supertrend", 0))
+
+        score = float(result.get("consensus_score", 0.0) or 0.0)
+        approved = bool(result.get("approved", False))
+        signal = str(result.get("signal", "NEUTRAL"))
+        regime = str(result.get("regime", "—"))
+        try:
+            self.quorum_bar.setValue(int(round(min(100.0, max(0.0, score)))))
+            tick = f"{symbol} · " if symbol else ""
+            self.quorum_status.setText(
+                f"{tick}{signal} · quorum {score:.1f}% (gate 75%) · regime {regime} · "
+                f"{'APPROVED' if approved else 'BLOCKED'}"
+            )
+            self.quorum_status.setStyleSheet(
+                f"color: {'#10b981' if approved else '#fbbf24'}; font-size: 11px; font-weight: 700;"
+            )
+        except Exception:
+            pass
+
+        # GBM predictive gate on the engine's own bracket
+        try:
+            entry = float(result.get("entry_price", 0.0) or 0.0)
+            target = float(result.get("target_price", 0.0) or 0.0)
+            stop = float(result.get("stop_loss", 0.0) or 0.0)
+            if entry > 0 and target > 0 and stop > 0:
+                gate = PredictiveGate.evaluate(
+                    df, signal=signal, entry_price=entry,
+                    target_price=target, stop_loss=stop,
+                )
+                prob = float(gate.get("probability_pct", 0.0) or 0.0)
+                self.pred_bar.setValue(int(round(min(100.0, max(0.0, prob)))))
+                gross = float(gate.get("expected_gross_gain", 0.0) or 0.0)
+                self.hurdle_lbl.setText(
+                    f"₹70 Net Hurdle: {'PASSED' if gate.get('hurdle_passed') else 'BLOCKED'} · "
+                    f"gross ₹{gross:,.2f} · reachability {prob:.1f}%"
+                )
+                self.hurdle_lbl.setStyleSheet(
+                    "color: #10b981; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;"
+                    if gate.get("hurdle_passed") else
+                    "color: #fbbf24; font-size: 11px; font-weight: 700; font-family: 'Consolas', monospace;"
+                )
+            else:
+                self.pred_bar.setValue(0)
+                self.hurdle_lbl.setText("₹70 Net Hurdle: AWAITING ENGINE BRACKET")
+        except Exception:
+            pass
+
+    def reset(self) -> None:
+        """Returns every gauge to its explicit unknown state."""
+        for name in getattr(self, "_engine_badges", {}):
+            self._paint_badge(name, 0)
+        try:
+            self.quorum_bar.setValue(0)
+            self.pred_bar.setValue(0)
+            self.quorum_status.setText("Status: Awaiting live strategy feed")
+            self.hurdle_lbl.setText("₹70 Net Hurdle: AWAITING SIGNAL")
+        except Exception:
+            pass
 
 
 class ReportsView(BasePageView):
@@ -1280,7 +1631,20 @@ class ReportsView(BasePageView):
             self.table.setItem(r, 8, QTableWidgetItem(f"₹{float(t.get('net_pnl', 0.0)):,.2f}"))
 
 
-# Page 11: Unified SettingsView imported from ui.settings_view (backed by BrokerVaultWidget & VaultManager)
-from ui.settings_view import SettingsView
+# Page 11: Unified SettingsView lives in ui.settings_view (backed by BrokerVaultWidget & VaultManager).
+# It is re-exported lazily below (PEP 562) because ui.settings_view subclasses BasePageView
+# from this module: a module-level import here would create a genuine import cycle whose
+# success depended on which module the interpreter happened to import first.
+_SETTINGS_VIEW_EXPORTS = ("SettingsView",)
+
+
+def __getattr__(name: str):
+    """Lazily re-exports SettingsView, breaking the views <-> settings_view cycle."""
+    if name in _SETTINGS_VIEW_EXPORTS:
+        from ui.settings_view import SettingsView as _SettingsView
+
+        globals()["SettingsView"] = _SettingsView
+        return _SettingsView
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

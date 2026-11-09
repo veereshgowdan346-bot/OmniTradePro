@@ -132,26 +132,30 @@ _BTN_INACTIVE = f"""
         font-weight: 600;
         padding: 0px 10px;
         text-align: left;
-        height: 36px;
+        height: 34px;
+        font-family: 'Segoe UI', 'Segoe UI Emoji', 'Noto Color Emoji',
+                     'Apple Color Emoji', 'Inter', sans-serif;
     }}
     QPushButton:hover {{
         background-color: {_BG_CARD};
         color: {_TEXT_PRI};
+        border-left: 3px solid rgba(0, 229, 255, 0.35);
     }}
 """
 
 _BTN_ACTIVE = f"""
     QPushButton {{
-        background-color: rgba(0, 229, 255, 0.10);
+        background-color: rgba(0, 229, 255, 0.12);
         border: none;
         border-left: 3px solid {_CYAN};
         border-radius: 0px;
         color: {_CYAN};
         font-size: 12px;
         font-weight: 700;
+        letter-spacing: 0.3px;
         padding: 0px 10px;
         text-align: left;
-        height: 36px;
+        height: 34px;
     }}
 """
 
@@ -204,30 +208,38 @@ class LeftSidebar(QFrame):
 
     nav_changed = Signal(int)
 
-    # 12 navigation destinations — icon, label, page-index
-    NAV_ITEMS: List[tuple] = [
-        ("⊞",  "Dashboard",      0),
-        ("📈", "Live Trading",    1),
-        ("🤖", "Trading Bots",   2),
-        ("⚙",  "Strategies",     3),
-        ("👁",  "Market Watch",   4),
-        ("⚡", "Auto Trade",     5),
-        ("⏱",  "Backtest",       6),
-        ("📊", "Analytics",      7),
-        ("💼", "Portfolio",      8),
-        ("🛡",  "Risk Manager",   9),
-        ("📄", "Reports",        10),
-        ("⚙",  "Settings",       11),
+    # 9 primary navigation tabs, grouped over the 12-page QStackedWidget.
+    # Each entry: (icon, label, tuple of page indices this tab opens).
+    # The stack keeps all 12 certified views; tabs are the presentation layer.
+    NAV_TABS: List[tuple] = [
+        ("📊", "Dashboard",            (0,)),
+        ("⚡", "Live Trading View",    (1, 5)),
+        ("🛡", "Risk Management",      (9,)),
+        ("👁", "Live Market Watch",    (4,)),
+        ("📋", "Orders & Trades",      (10,)),
+        ("💼", "Portfolio & Positions", (8,)),
+        ("🧠", "Strategy Consensus",   (3, 2, 6, 7)),
+        ("🏦", "Manage Accounts",      (11,)),
+        ("⚙", "System Settings",       (11,)),
     ]
+
+    #: Page -> owning tab index (first tab in NAV_TABS that opens the page).
+    @classmethod
+    def tab_for_page(cls, page: int) -> int:
+        for idx, (_, _, pages) in enumerate(cls.NAV_TABS):
+            if page in pages:
+                return idx
+        return 0
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("LeftSidebarFrame")
-        self.setFixedWidth(200)
+        self.setFixedWidth(220)
         self.setStyleSheet(_SIDEBAR_FRAME)
 
         self.buttons: List[QPushButton] = []
         self.active_index: int = 0
+        self._active_tab: int = 0
 
         self._init_ui()
 
@@ -238,13 +250,14 @@ class LeftSidebar(QFrame):
         layout.setContentsMargins(0, 10, 0, 8)
         layout.setSpacing(1)
 
-        # ── Navigation buttons ──────────────────────────────────────────────
-        for icon, label, idx in self.NAV_ITEMS:
+        # ── Navigation tabs (9 grouped destinations) ───────────────────────
+        for tab_idx, (icon, label, pages) in enumerate(self.NAV_TABS):
             btn = QPushButton(f"  {icon}  {label}", self)
-            btn.setFixedHeight(36)
+            btn.setFixedHeight(34)
+            btn.setToolTip(f"Opens page {pages[0]}")
             try:
                 btn.clicked.connect(
-                    lambda checked=False, i=idx: self._on_btn_clicked(i)
+                    lambda checked=False, i=tab_idx: self._on_btn_clicked(i)
                 )
             except Exception:
                 pass
@@ -316,44 +329,101 @@ class LeftSidebar(QFrame):
         div.setStyleSheet(_DIVIDER)
         fl.addWidget(div)
 
-        # Connection status row
+        # Connection status row (live: driven by the stream + RMS telemetry)
         conn_row = QHBoxLayout()
         conn_row.setSpacing(4)
-        conn_dot = QLabel("●", footer)
-        conn_dot.setStyleSheet(f"color: {_BULL}; font-size: 9px;")
-        conn_lbl = QLabel("CONNECTED", footer)
-        conn_lbl.setStyleSheet(f"color: {_BULL}; font-size: 9px; font-weight: 700;")
-        conn_row.addWidget(conn_dot)
-        conn_row.addWidget(conn_lbl)
+        self.conn_dot = QLabel("●", footer)
+        self.conn_dot.setStyleSheet("color: #ef4444; font-size: 9px;")
+        self.conn_lbl = QLabel("DISCONNECTED", footer)
+        self.conn_lbl.setStyleSheet("color: #ef4444; font-size: 9px; font-weight: 700;")
+        conn_row.addWidget(self.conn_dot)
+        conn_row.addWidget(self.conn_lbl)
         conn_row.addStretch()
-        margin_lbl = QLabel("Margin: --", footer)
-        margin_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9px;")
-        conn_row.addWidget(margin_lbl)
+        self.latency_lbl = QLabel("-- ms", footer)
+        self.latency_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9px;")
+        conn_row.addWidget(self.latency_lbl)
         fl.addLayout(conn_row)
+
+        # Ledger margin row
+        margin_row = QHBoxLayout()
+        margin_row.setSpacing(4)
+        margin_cap = QLabel("LEDGER", footer)
+        margin_cap.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 8px; letter-spacing: 0.6px;")
+        self.margin_lbl = QLabel("Margin: --", footer)
+        self.margin_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 9px; font-weight: 700;")
+        try:
+            self.margin_lbl.setAlignment(Qt.AlignRight)
+        except Exception:
+            pass
+        margin_row.addWidget(margin_cap)
+        margin_row.addStretch()
+        margin_row.addWidget(self.margin_lbl)
+        fl.addLayout(margin_row)
 
         layout.addWidget(footer)
         layout.addSpacing(4)
 
     # ── Event handling ────────────────────────────────────────────────────────
 
-    def _on_btn_clicked(self, index: int) -> None:
-        self.set_active_index(index)
-        try:
-            self.nav_changed.emit(index)
-        except Exception:
-            pass
+    def _on_btn_clicked(self, tab_index: int) -> None:
+        """Tab click: remember the exact tab, then route to its primary page."""
+        if 0 <= tab_index < len(self.buttons):
+            self._active_tab = tab_index
+            page = self.NAV_TABS[tab_index][2][0]
+            self.active_index = page
+            self._refresh_styles()
+            try:
+                self.nav_changed.emit(page)
+            except Exception:
+                pass
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_active_index(self, index: int) -> None:
-        """Highlight the button at *index* and clear all others."""
-        if 0 <= index < len(self.buttons):
+        """
+        Highlight the tab that owns *index* (a page number, 0-11).
+
+        ``active_index`` keeps the raw page value so programmatic routing stays
+        1:1 with the QStackedWidget; the glow is applied to the owning tab.
+        """
+        if 0 <= index < 12:
             self.active_index = index
+            self._active_tab = self.tab_for_page(index)
             self._refresh_styles()
+
+    # ── Live telemetry dock ───────────────────────────────────────────────────
+
+    def set_connection_state(self, connected: bool, latency_ms=None) -> None:
+        """Drives the bottom-dock connection pulse + latency readout."""
+        try:
+            if connected:
+                self.conn_dot.setStyleSheet(f"color: {_BULL}; font-size: 9px;")
+                self.conn_lbl.setText("CONNECTED")
+                self.conn_lbl.setStyleSheet(f"color: {_BULL}; font-size: 9px; font-weight: 700;")
+                self.latency_lbl.setText(f"{latency_ms} ms" if latency_ms is not None else "-- ms")
+                self.latency_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 9px;")
+            else:
+                self.conn_dot.setStyleSheet("color: #ef4444; font-size: 9px;")
+                self.conn_lbl.setText("DISCONNECTED")
+                self.conn_lbl.setStyleSheet("color: #ef4444; font-size: 9px; font-weight: 700;")
+                self.latency_lbl.setText("-- ms")
+                self.latency_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9px;")
+        except Exception:
+            pass
+
+    def set_margin(self, available) -> None:
+        """Drives the bottom-dock ledger margin readout (None -> unknown)."""
+        try:
+            if available is None:
+                self.margin_lbl.setText("Margin: --")
+                return
+            self.margin_lbl.setText(f"Margin: ₹{float(available):,.2f}")
+        except Exception:
+            pass
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _refresh_styles(self) -> None:
-        """Apply active / inactive QSS to every nav button."""
+        """Apply active / inactive QSS to every nav tab."""
         for idx, btn in enumerate(self.buttons):
-            btn.setStyleSheet(_BTN_ACTIVE if idx == self.active_index else _BTN_INACTIVE)
+            btn.setStyleSheet(_BTN_ACTIVE if idx == self._active_tab else _BTN_INACTIVE)

@@ -46,3 +46,6 @@ report.txt
 dist/
 build/
 *.spec
+
+# Headless Qt ABI shims (Linux CI only — see tools/build_headless_qt_shims.sh)
+.shim/

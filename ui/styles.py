@@ -59,6 +59,13 @@ class GlassmorphismTheme:
     TEXT_SUBTLE             = "#64748b"          # legacy alias
     TEXT_NUMERIC            = "#e2e8f0"          # price readouts
 
+    # ── Scrollbar & Typography Tokens (institutional terminal) ─────────────
+    SCROLLBAR_WIDTH         = 5                          # ultra-slim dark scrollbars
+    SCROLLBAR_HANDLE        = "#1f293d"                  # scrollbar handle
+    SCROLLBAR_HANDLE_HOVER  = "#00e5ff"                  # cyber cyan on hover
+    FONT_NUMERIC            = "'Consolas', 'SF Mono', 'Menlo', monospace"
+    FONT_UI                 = "'Segoe UI', Inter, sans-serif"
+
     # ─────────────────────────────────────────────────────────────────────────
     # Stylesheets
     # ─────────────────────────────────────────────────────────────────────────
@@ -68,8 +75,8 @@ class GlassmorphismTheme:
         """Minimal global QSS required by the system instructions spec."""
         return f"""
         QMainWindow, QWidget {{ background-color: {cls.BG_CANVAS}; color: {cls.TEXT_PRIMARY}; font-family: 'Segoe UI', Inter, sans-serif; }}
-        QScrollBar:vertical {{ background: {cls.BG_SURFACE}; width: 6px; border-radius: 3px; }}
-        QScrollBar::handle:vertical {{ background: {cls.BG_ELEVATED}; border-radius: 3px; min-height: 20px; }}
+        QScrollBar:vertical {{ background: {cls.BG_SURFACE}; width: {cls.SCROLLBAR_WIDTH}px; border-radius: 3px; }}
+        QScrollBar::handle:vertical {{ background: {cls.SCROLLBAR_HANDLE}; border-radius: 3px; min-height: 20px; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         QToolTip {{ background-color: {cls.BG_ELEVATED}; color: {cls.TEXT_PRIMARY}; border: 1px solid {cls.ACCENT_CYAN}; border-radius: 4px; padding: 4px 8px; }}
         """
@@ -336,19 +343,19 @@ class GlassmorphismTheme:
         /* ── Sleek Cyber Scrollbars ───────────────────────────────────────── */
         QScrollBar:vertical {{
             background: {cls.BG_SURFACE};
-            width: 6px;
+            width: {cls.SCROLLBAR_WIDTH}px;
             margin: 0px;
             border-radius: 3px;
         }}
 
         QScrollBar::handle:vertical {{
-            background: {cls.BG_ELEVATED};
+            background: {cls.SCROLLBAR_HANDLE};
             min-height: 20px;
             border-radius: 3px;
         }}
 
         QScrollBar::handle:vertical:hover {{
-            background: {cls.ACCENT_CYAN};
+            background: {cls.SCROLLBAR_HANDLE_HOVER};
         }}
 
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -357,19 +364,19 @@ class GlassmorphismTheme:
 
         QScrollBar:horizontal {{
             background: {cls.BG_SURFACE};
-            height: 6px;
+            height: {cls.SCROLLBAR_WIDTH}px;
             margin: 0px;
             border-radius: 3px;
         }}
 
         QScrollBar::handle:horizontal {{
-            background: {cls.BG_ELEVATED};
+            background: {cls.SCROLLBAR_HANDLE};
             min-width: 20px;
             border-radius: 3px;
         }}
 
         QScrollBar::handle:horizontal:hover {{
-            background: {cls.ACCENT_CYAN};
+            background: {cls.SCROLLBAR_HANDLE_HOVER};
         }}
 
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{

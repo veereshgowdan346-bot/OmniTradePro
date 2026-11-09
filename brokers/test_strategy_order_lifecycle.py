@@ -30,6 +30,7 @@ Exhaustive verification across 5 dimensions:
 
 import os
 import sys
+import tempfile
 import time
 import uuid
 import unittest
@@ -39,6 +40,15 @@ from unittest.mock import MagicMock, patch
 # Ensure project root is on sys.path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
+
+# ------------------------------------------------------------------------------
+# TEST ISOLATION: every ledger/vault write in this suite must land in a
+# throwaway data directory. Previously the suite required the operator's real
+# encrypted broker credentials to already exist in the production vault, so it
+# failed (or silently overwrote secrets) on any clean machine.
+# ------------------------------------------------------------------------------
+_ISOLATED_DATA_DIR = Path(tempfile.mkdtemp(prefix="omnitrade_lifecycle_"))
+os.environ["OMNITRADE_DATA_DIR"] = str(_ISOLATED_DATA_DIR)
 
 # Bootstrap QApplication BEFORE any UI module imports to prevent Qt crash
 # Use the real Windows display (not offscreen) so widget creation succeeds
@@ -87,7 +97,28 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
     """End-to-End Institutional Strategy & Order Lifecycle Verification Harness."""
 
     @classmethod
+    def tearDownClass(cls):
+        for patcher in getattr(cls, "_dialog_patchers", []):
+            patcher.stop()
+
+    @classmethod
     def setUpClass(cls):
+        # Headless safety: QMessageBox.exec() spins a nested event loop and blocks
+        # forever when no operator can dismiss the dialog. The vault widget confirms
+        # saves with a modal information box, which previously hung this suite.
+        cls._dialog_patchers = [
+            patch.multiple(
+                "ui.vault_dialog.QMessageBox",
+                information=MagicMock(), warning=MagicMock(), critical=MagicMock(),
+            ),
+            patch.multiple(
+                "ui.main_window.QMessageBox",
+                information=MagicMock(), warning=MagicMock(), critical=MagicMock(),
+            ),
+        ]
+        for _p in cls._dialog_patchers:
+            _p.start()
+
         print(f"\n{ANSI.CYAN}{ANSI.BOLD}" + "=" * 80)
         print("  OMNITRADEPRO - INSTITUTIONAL STRATEGY & ORDER LIFECYCLE BENCHMARK")
         print("=" * 80 + f"{ANSI.RESET}")
@@ -109,6 +140,40 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
         cls.vault = VaultManager()
         cls.db_manager = DatabaseManager()
         cls.db_handler = DatabaseHandler()
+
+        # Seed synthetic (non-production) broker profiles for the crypto/two-way-sync
+        # dimension. Secrets are generated per run; nothing here is a real credential.
+        import pyotp
+        cls.seeded_credentials = {}
+        for idx, broker in enumerate(("ANGEL_ONE", "SHOONYA", "GROWW"), start=1):
+            profile = {
+                "client_id": f"TESTCLIENT{idx:03d}",
+                "api_key": f"TESTAPIKEY{idx:04d}",
+                "secret_key": f"TESTSECRET{idx:04d}",
+                "login_mpin": f"{1000 + idx}",
+                "totp_secret": pyotp.random_base32(),
+                "trading_pin": f"{600000 + idx}",
+            }
+            cls.vault.save_broker_credentials(
+                broker_name=broker,
+                client_id=profile["client_id"],
+                api_key=profile["api_key"],
+                secret_key=profile["secret_key"],
+                login_mpin=profile["login_mpin"],
+                totp_secret=profile["totp_secret"],
+                trading_pin=profile["trading_pin"],
+                is_active=False,
+                is_trading_enabled=False,
+            )
+            cls.seeded_credentials[broker] = profile
+
+        # Hard guarantee: this run cannot touch the operator's real vault.
+        assert Path(str(cls.vault.db_path)).parent == _ISOLATED_DATA_DIR, (
+            f"Vault isolation breach: {cls.vault.db_path}"
+        )
+        assert Path(str(cls.db_handler.db_path)).parent == _ISOLATED_DATA_DIR, (
+            f"Ledger isolation breach: {cls.db_handler.db_path}"
+        )
 
     # =========================================================================
     # DIMENSION 1: STRATEGY CONSENSUS EVALUATION
@@ -257,6 +322,14 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
         print("  " + "-" * 76)
 
         router = OrderRouter(vault_manager=self.vault)
+
+        # Declare the capital envelope this lifecycle scenario trades on. The router
+        # now enforces the operator's ceiling by default (fail-closed), so a 100-share
+        # order must be funded explicitly instead of relying on enforcement being off.
+        router.update_risk_parameters(
+            mode="PAPER", trade_capital=100_000.0, max_sl=500.0,
+            risk_percentage=5.0, daily_drawdown_pct=10.0, enforce=True
+        )
 
         # ---------------------------------------------------------------------
         # Scenario A: PAPER Mode Lifecycle
@@ -489,24 +562,54 @@ class TestStrategyOrderLifecycleSuite(unittest.TestCase):
         router.update_risk_parameters(mode="PAPER", trade_capital=1000.0, max_sl=80.0, enforce=False)
 
 
+# Dimension label -> unittest method that proves it.
+CERTIFICATION_DIMENSIONS = (
+    ("Strategies Voting Output (SMC, VWAP, Dual EMA, SuperTrend)", "test_01_strategies_voting_and_quorum"),
+    ("Quorum Consensus (>=75%) & Predictive Gate (>=65%)", "test_02_predictive_gate_and_risk_budget"),
+    ("Pre-Flight Order Placement & Immediate Cancellation", "test_03_order_placement_and_immediate_cancel"),
+    ("Settings Synchronization across Angel One, Shoonya, Groww", "test_04_multi_broker_vault_and_two_way_sync"),
+    ("Page Isolation (Live Trading View vs Dashboard)", "test_05_page_isolation"),
+    ("Execution Mode & Front-Page Risk Controller Enforcement", "test_06_uniform_risk_controller_enforcement"),
+)
+
+
+def _status_for(method_name: str, failing: set, ran: set) -> str:
+    """Derives a dimension's verdict from the real unittest outcome (never hardcoded)."""
+    if method_name not in ran:
+        return f"{ANSI.YELLOW}[ SKIP ]{ANSI.RESET}"
+    if method_name in failing:
+        return f"{ANSI.RED}[ FAIL ]{ANSI.RESET}"
+    return f"{ANSI.GREEN}[ PASS ]{ANSI.RESET}"
+
+
 def run_benchmark():
-    """Runs the suite and outputs the required ASCII summary matrix."""
+    """Runs the suite and outputs a summary matrix derived from actual test results."""
     suite = unittest.TestLoader().loadTestsFromTestCase(TestStrategyOrderLifecycleSuite)
     runner = unittest.TextTestRunner(verbosity=1)
     result = runner.run(suite)
+
+    # Ground truth: only these outcomes may be reported as PASS.
+    failing = {t.id().rsplit(".", 1)[-1] for t, _ in (result.failures + result.errors)}
+    # Discovered test methods (unittest nulls out already-run suite entries)
+    ran = set(unittest.TestLoader().getTestCaseNames(TestStrategyOrderLifecycleSuite))
 
     print("\n" + "=" * 80)
     print("  OMNITRADEPRO - END-TO-END EXECUTION & LIFECYCLE CERTIFICATION MATRIX")
     print("=" * 80)
     print(f"  {'DIMENSION':<60} | {'STATUS':<10}")
     print("  " + "-" * 74)
-    print(f"  {'Strategies Voting Output (SMC, VWAP, Dual EMA, SuperTrend)':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print(f"  {'Quorum Consensus (>=75%) & Predictive Gate (>=65%)':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print(f"  {'Pre-Flight Order Placement & Immediate Cancellation':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print(f"  {'Settings Synchronization across Angel One, Shoonya, Groww':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print(f"  {'Page Isolation (Live Trading View vs Dashboard)':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print(f"  {'Execution Mode & Front-Page Risk Controller Enforcement':<60} | {ANSI.GREEN}[ PASS ]{ANSI.RESET}")
-    print("=" * 80 + "\n")
+    for label, method in CERTIFICATION_DIMENSIONS:
+        print(f"  {label:<60} | {_status_for(method, failing, ran)}")
+    print("=" * 80)
+
+    passed = sum(1 for _, m in CERTIFICATION_DIMENSIONS if m in ran and m not in failing)
+    total = len(CERTIFICATION_DIMENSIONS)
+    if result.wasSuccessful():
+        print(f"\n  {ANSI.GREEN}{ANSI.BOLD}CERTIFIED: {passed}/{total} lifecycle dimensions passed "
+              f"({result.testsRun} tests, 0 failures, 0 errors).{ANSI.RESET}\n")
+    else:
+        print(f"\n  {ANSI.RED}{ANSI.BOLD}NOT CERTIFIED: {passed}/{total} dimensions passed | "
+              f"{len(result.failures)} failure(s), {len(result.errors)} error(s).{ANSI.RESET}\n")
 
     return 0 if result.wasSuccessful() else 1
 

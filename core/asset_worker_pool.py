@@ -59,6 +59,7 @@ class AssetExecutionWorker(threading.Thread):
         self.tasks_processed: int = 0
         self.orders_generated: int = 0
         self.tasks_dropped: int = 0
+        self.evaluation_errors: int = 0
         self.total_processing_time_ms: float = 0.0
         self.last_active_timestamp: Optional[str] = None
         self.last_latency_ms: float = 0.0
@@ -117,6 +118,35 @@ class AssetExecutionWorker(threading.Thread):
         self._is_running = False
         logger.info(f"[{self.shard_id}] Worker loop gracefully stopped.")
 
+    def _evaluate_consensus(self, price_data, symbol: str, eval_kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Normalises the heterogeneous consensus-engine contracts used by this pool.
+
+        `core.consensus.ConsensusEngine` exposes the classmethod `evaluate_consensus`;
+        custom/adapter engines expose `evaluate`. Previously only `evaluate` was called,
+        so the built-in engine raised AttributeError on every task and the exception was
+        swallowed by the worker loop (no signals, no orders, no visible failure).
+        """
+        engine = self.consensus_engine
+        try:
+            if hasattr(engine, "evaluate_consensus"):
+                kwargs = dict(eval_kwargs)
+                # Statutory predictive probability gate must participate in the
+                # automated path, not only in manual/backtest invocations.
+                kwargs.setdefault("enforce_predictive_gate", True)
+                return engine.evaluate_consensus(price_data, **kwargs)
+            if hasattr(engine, "evaluate"):
+                return engine.evaluate(df=price_data, symbol=symbol, **eval_kwargs)
+            raise AttributeError(
+                f"Consensus engine {type(engine).__name__} exposes neither "
+                f"'evaluate_consensus' nor 'evaluate'."
+            )
+        except Exception as exc:
+            logger.error(f"[{self.shard_id}] Consensus evaluation failed for {symbol}: {exc}", exc_info=True)
+            with self._lock:
+                self.evaluation_errors += 1
+            return None
+
     def _process_task(self, task: Dict[str, Any]) -> None:
         """Executes signal evaluation, risk checks, and conditional routing."""
         action = task.get("action", "EVALUATE")
@@ -135,16 +165,14 @@ class AssetExecutionWorker(threading.Thread):
             # Evaluate consensus if engine and price data provided
             if self.consensus_engine and price_data is not None:
                 eval_kwargs = task.get("eval_kwargs", {})
-                consensus_result = self.consensus_engine.evaluate(
-                    df=price_data,
-                    symbol=symbol,
-                    **eval_kwargs
-                )
-                signal = consensus_result.get("signal", "NEUTRAL")
-                task["consensus_result"] = consensus_result
+                consensus_result = self._evaluate_consensus(price_data, symbol, eval_kwargs)
+                # A failed evaluation must never skip task/future completion downstream.
+                signal = consensus_result.get("signal", "NEUTRAL") if consensus_result else "NEUTRAL"
+                if consensus_result is not None:
+                    task["consensus_result"] = consensus_result
 
                 # Check if signal generates trade
-                if signal in ("BUY", "SELL") and self.order_router:
+                if consensus_result is not None and signal in ("BUY", "SELL") and self.order_router:
                     entry = consensus_result.get("entry_price", current_price or 0.0)
                     sl = consensus_result.get("stop_loss", 0.0)
                     tgt = consensus_result.get("target_price", 0.0)
@@ -199,6 +227,7 @@ class AssetExecutionWorker(threading.Thread):
                 "tasks_processed": self.tasks_processed,
                 "orders_generated": self.orders_generated,
                 "tasks_dropped": self.tasks_dropped,
+                "evaluation_errors": self.evaluation_errors,
                 "avg_processing_latency_ms": round(avg_ms, 3),
                 "last_latency_ms": round(self.last_latency_ms, 3),
                 "last_active_timestamp": self.last_active_timestamp,
