@@ -40,6 +40,16 @@ from unittest.mock import MagicMock, patch
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+# Bootstrap QApplication BEFORE any UI module imports to prevent Qt crash
+# Use the real Windows display (not offscreen) so widget creation succeeds
+try:
+    from PySide6.QtWidgets import QApplication as _QApp
+    from PySide6.QtCore import Qt as _Qt
+    _QApp.setAttribute(_Qt.AA_DisableHighDpiScaling, True)
+    _qt_app = _QApp.instance() or _QApp(sys.argv)
+except Exception:
+    _qt_app = None
+
 import pandas as pd
 import numpy as np
 

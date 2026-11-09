@@ -12,6 +12,7 @@ High-performance TradingView-grade canvas:
 - Deterministic historical seed candles on startup (no blank black void)
 """
 
+import math
 import random
 from typing import Optional, List, Dict, Any
 import numpy as np
@@ -251,11 +252,72 @@ class CandleCanvas(QWidget):
         self.vwap: List[float] = []
         self.current_price: float = 0.0
 
+        # ── Damped Y-axis scale state ──────────────────────────────────────
+        self._scale_min: float = 0.0        # Current rendered Y-axis floor
+        self._scale_max: float = 0.0        # Current rendered Y-axis ceiling
+        self._scale_dirty: bool = False     # True when candle data has changed and needs repaint
+
+        # ── 30 FPS render timer (set up in ChartWidget, not here) ─────────
+        # Data mutations mark _scale_dirty=True; the timer drives update()
+
         # Viewport and interaction
         self.mouse_pos: Optional[QPointF] = None
         self.show_vwap: bool = True
         self.show_ema: bool = True
         self.show_volume: bool = True
+
+        try:
+            self.setAttribute(Qt.WA_OpaquePaintEvent)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Damped Y-axis scale computation
+    # ------------------------------------------------------------------
+
+    def _compute_scale(self) -> tuple:
+        """
+        Computes a stable, hysteresis-damped Y-axis [min, max] from the
+        current candle set.
+
+        Algorithm:
+        1. Find raw_min/raw_max across all visible candle highs/lows.
+        2. Apply a fixed 15% headroom pad above and below.
+        3. Snap both bounds to the nearest ₹5 quantum step to suppress
+           sub-step micro-oscillations.
+        4. Only expand (never contract) the current rendered scale unless
+           the new raw range differs from the existing scale by more than
+           2% — this is the hysteresis gate that kills bouncing.
+        """
+        if not self.candles:
+            return (0.0, 1.0)
+
+        raw_min = min(c["low"]  for c in self.candles)
+        raw_max = max(c["high"] for c in self.candles)
+        span    = raw_max - raw_min if raw_max > raw_min else max(raw_max * 0.01, 1.0)
+
+        pad        = span * 0.15          # 15% headroom padding
+        target_min = raw_min - pad
+        target_max = raw_max + pad
+
+        # ── Quantum snapping: round DOWN for floor, UP for ceiling ──────
+        step = 5.0 if span > 50 else 1.0   # ₹5 step for large spans, ₹1 for small
+        target_min = math.floor(target_min / step) * step
+        target_max = math.ceil(target_max  / step) * step
+
+        # ── Hysteresis gate: only update scale if breach > 2% ───────────
+        if self._scale_min == 0.0 and self._scale_max == 0.0:
+            # First population — accept immediately
+            return (target_min, target_max)
+
+        current_range = max(self._scale_max - self._scale_min, 1.0)
+        expand_min    = target_min < self._scale_min - current_range * 0.02
+        expand_max    = target_max > self._scale_max + current_range * 0.02
+
+        new_min = target_min if expand_min else self._scale_min
+        new_max = target_max if expand_max else self._scale_max
+
+        return (new_min, new_max)
 
     # ------------------------------------------------------------------
     # Historical seed population
@@ -277,8 +339,11 @@ class CandleCanvas(QWidget):
             Number of 5-minute candles to generate (default 80).
         """
         candles, times = _generate_seed_candles(symbol, n)
-        self.candles = candles
-        self.times = times
+        self.candles      = candles
+        self.times        = times
+        self._scale_min   = 0.0   # Reset so _compute_scale accepts fresh bounds
+        self._scale_max   = 0.0
+        self._scale_dirty = True
         self._calculate_indicators()
         self.update()
         self.is_connected = False   # still seed data, not live
@@ -315,42 +380,37 @@ class CandleCanvas(QWidget):
             self.current_price = self.candles[-1]["close"]
 
     def update_tick(self, ltp: float) -> None:
-        """Ingests real incoming exchange ticks and maintains authentic candle aggregation.
-
-        On the first live tick after seed data, seed candles are cleared and
-        fresh live aggregation begins from this tick.
+        """
+        Ingests a live exchange tick into the in-memory candle array.
+        Does NOT trigger a repaint — the 30 FPS render timer does that.
         """
         if ltp <= 0:
             return
 
-        # Transition from seed → live on first real tick
+        # Transition seed → live on first real tick
         if not self.is_connected:
             self.candles = []
-            self.times = []
+            self.times   = []
+            self._scale_min = 0.0
+            self._scale_max = 0.0
             self.is_connected = True
 
         self.current_price = ltp
 
         if not self.candles:
             self.candles.append({
-                "open": ltp,
-                "high": ltp,
-                "low": ltp,
-                "close": ltp,
-                "volume": 1000.0
+                "open": ltp, "high": ltp, "low": ltp,
+                "close": ltp, "volume": 1000.0
             })
             self.times.append("Now")
         else:
             last = self.candles[-1]
             last["close"] = ltp
-            if ltp > last["high"]:
-                last["high"] = ltp
-            if ltp < last["low"]:
-                last["low"] = ltp
+            if ltp > last["high"]: last["high"] = ltp
+            if ltp < last["low"]:  last["low"]  = ltp
             last["volume"] += 50.0
 
-        self._calculate_indicators()
-        self.update()
+        self._scale_dirty = True   # Signal render timer — do NOT call update() here
 
     def set_historical_data(self, df: pd.DataFrame) -> None:
         """Populates canvas with authentic historical candle dataframe."""
@@ -379,6 +439,9 @@ class CandleCanvas(QWidget):
                 self.times.append(f"{len(new_candles)}m")
 
         self.candles = new_candles
+        self._scale_min = 0.0
+        self._scale_max = 0.0
+        self._scale_dirty = True
         self._calculate_indicators()
         self.update()
 
@@ -504,21 +567,10 @@ class CandleCanvas(QWidget):
             painter.end()
             return
 
-        # 3. Geometric Scaling Math with 10% Dynamic Headroom Padding
-        highs = [c["high"] for c in self.candles]
-        lows = [c["low"] for c in self.candles]
-        min_raw = min(lows)
-        max_raw = max(highs)
-        diff = max_raw - min_raw
-
-        # Prevent zero division or hyper-sensitivity on single tick
-        if diff < 1e-3:
-            pad = max(max_raw * 0.005, 5.0)
-        else:
-            pad = max(diff * 0.10, 2.0)  # Mandatory 10% dynamic padding margin
-
-        min_p = min_raw - pad
-        max_p = max_raw + pad
+        # 3. Damped/Hysteresis Y-axis scale (never bounces on micro-ticks)
+        self._scale_min, self._scale_max = self._compute_scale()
+        min_p   = self._scale_min
+        max_p   = self._scale_max
         p_range = max_p - min_p if max_p > min_p else 1.0
 
         # Volume scale headroom
@@ -852,12 +904,30 @@ class ChartWidget(QFrame):
         self.canvas = CandleCanvas(self)
         layout.addWidget(self.canvas)
 
+        # 30 FPS render timer — decouples tick data from Qt paint events
+        try:
+            from PySide6.QtCore import QTimer
+            self._render_timer = QTimer(self)
+            self._render_timer.setInterval(33)   # ~30 FPS
+            self._render_timer.timeout.connect(self._on_render_tick)
+            self._render_timer.start()
+        except Exception:
+            pass
+
         # Seed the canvas with realistic historical candles immediately
         try:
             self.canvas.seed_historical(self.current_symbol)
             self.restore_default_ohlc()
         except Exception:
             pass
+
+    def _on_render_tick(self) -> None:
+        """30 FPS render loop: only repaints when new tick data has arrived."""
+        if self.canvas._scale_dirty:
+            self.canvas._scale_dirty = False
+            self.canvas._calculate_indicators()
+            self.canvas.update()
+            self.restore_default_ohlc()
 
     def _toggle_vwap(self) -> None:
         self.canvas.show_vwap = not self.canvas.show_vwap
@@ -995,6 +1065,9 @@ class ChartWidget(QFrame):
         self.canvas.vwap = []
         self.canvas.current_price = 0.0
         self.canvas.is_connected = False
+        self.canvas._scale_min = 0.0
+        self.canvas._scale_max = 0.0
+        self.canvas._scale_dirty = False
         try:
             self.canvas.update()
         except Exception:

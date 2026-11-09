@@ -206,24 +206,24 @@ class LeftSidebar(QFrame):
 
     # 12 navigation destinations — icon, label, page-index
     NAV_ITEMS: List[tuple] = [
-        ("⊞", "Dashboard",     0),
-        ("📈", "Live Trading",  1),
-        ("🤖", "Trading Bots", 2),
-        ("⚙",  "Strategies",   3),
-        ("👁",  "Market Watch", 4),
-        ("⚡", "Auto Trade",   5),
-        ("⏱",  "Backtest",     6),
-        ("📊", "Analytics",    7),
-        ("💼", "Portfolio",    8),
-        ("🛡",  "Risk Manager", 9),
-        ("📄", "Reports",     10),
-        ("⚙",  "Settings",    11),
+        ("⊞",  "Dashboard",      0),
+        ("📈", "Live Trading",    1),
+        ("🤖", "Trading Bots",   2),
+        ("⚙",  "Strategies",     3),
+        ("👁",  "Market Watch",   4),
+        ("⚡", "Auto Trade",     5),
+        ("⏱",  "Backtest",       6),
+        ("📊", "Analytics",      7),
+        ("💼", "Portfolio",      8),
+        ("🛡",  "Risk Manager",   9),
+        ("📄", "Reports",        10),
+        ("⚙",  "Settings",       11),
     ]
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("LeftSidebarFrame")
-        self.setFixedWidth(190)
+        self.setFixedWidth(200)
         self.setStyleSheet(_SIDEBAR_FRAME)
 
         self.buttons: List[QPushButton] = []
@@ -284,14 +284,14 @@ class LeftSidebar(QFrame):
         self.mascot_lbl.setVisible(False)
 
     def _build_footer(self, layout: QVBoxLayout) -> None:
-        """Builds the ⚡ OmniTradePro brand footer with status pill."""
+        """Builds the ⚡ OmniTradePro brand footer with connection status and margin dock."""
         footer = QFrame(self)
         footer.setStyleSheet(
-            f"QFrame {{ background-color: transparent; padding: 0px; }}"
+            f"QFrame {{ background-color: {_BG_CARD}; border: 1px solid {_BORDER}; border-radius: 6px; padding: 2px; }}"
         )
         fl = QVBoxLayout(footer)
-        fl.setContentsMargins(8, 6, 8, 4)
-        fl.setSpacing(3)
+        fl.setContentsMargins(8, 6, 8, 6)
+        fl.setSpacing(4)
 
         # Brand title
         lbl_title = QLabel("⚡ OmniTradePro", footer)
@@ -311,17 +311,28 @@ class LeftSidebar(QFrame):
             pass
         fl.addWidget(lbl_sub)
 
+        # Thin divider
+        div = QFrame(footer)
+        div.setStyleSheet(_DIVIDER)
+        fl.addWidget(div)
+
+        # Connection status row
+        conn_row = QHBoxLayout()
+        conn_row.setSpacing(4)
+        conn_dot = QLabel("●", footer)
+        conn_dot.setStyleSheet(f"color: {_BULL}; font-size: 9px;")
+        conn_lbl = QLabel("CONNECTED", footer)
+        conn_lbl.setStyleSheet(f"color: {_BULL}; font-size: 9px; font-weight: 700;")
+        conn_row.addWidget(conn_dot)
+        conn_row.addWidget(conn_lbl)
+        conn_row.addStretch()
+        margin_lbl = QLabel("Margin: --", footer)
+        margin_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 9px;")
+        conn_row.addWidget(margin_lbl)
+        fl.addLayout(conn_row)
+
         layout.addWidget(footer)
         layout.addSpacing(4)
-
-        # Status pill
-        status_pill = QLabel("● Live", self)
-        status_pill.setStyleSheet(_STATUS_PILL)
-        try:
-            status_pill.setAlignment(Qt.AlignCenter)
-        except Exception:
-            pass
-        layout.addWidget(status_pill)
 
     # ── Event handling ────────────────────────────────────────────────────────
 

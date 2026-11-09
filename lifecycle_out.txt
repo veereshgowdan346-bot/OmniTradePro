@@ -1,0 +1,63 @@
+
+[96m[1m================================================================================
+  OMNITRADEPRO - INSTITUTIONAL STRATEGY & ORDER LIFECYCLE BENCHMARK
+================================================================================[0m
+
+[1m== 1. STRATEGY CONSENSUS EVALUATION (4-ALGORITHM MATRIX)[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m SMC Liquidity Sweep (3-candle lookback): Vote=+1 (Bullish SMC Sweep: Low ₹72.70 grabbed liquidity below ₹72.74, confirmed close @ ₹73.48)
+  [92m[ PASS ][0m Institutional VWAP: Vote=+1 (VWAP ₹73.13, Div +₹0.35)
+  [92m[ PASS ][0m Dual EMA (9/21): Vote=+1 (EMA9 ₹73.14 > EMA21 ₹73.06)
+  [92m[ PASS ][0m SuperTrend Volatility Gate: Vote=+1 (SuperTrend Line ₹72.75)
+  [92m[ PASS ][0m Unanimous Consensus Certified: 4/4 Votes (100.0%) -> Signal: BUY
+  [92m[ PASS ][0m Quorum Consensus Certified: 3/4 Votes (75.0%) -> Signal: BUY
+
+[1m== 2. RISK PIPELINE & PREDICTIVE PROBABILITY GATE[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m Predictive Gate: Forward Reachability 67.89% >= 65.0% | Expected Gross ₹950.00
+  [92m[ PASS ][0m Predictive Gate Rejection Certified: Sub-threshold setups cleanly rejected
+  [92m[ PASS ][0m Side-Aware Profit Gate (BUY): Quantity 32104 | Gross ₹60997.60 >= ₹70.00
+  [92m[ PASS ][0m Side-Aware Profit Gate (Rejection): Low-yield setups rejected: Gross ₹0.10 < ₹70.00
+  [92m[ PASS ][0m Dynamic Slippage Guard (Pass): Drift 0.050% <= 0.080% approved
+  [92m[ PASS ][0m Dynamic Slippage Guard (Reject): Drift 0.200% > 0.080% rejected
+  [92m[ PASS ][0m Pre-Flight Margin Check: Required ₹4,900.00 <= Available ₹50,000.00
+
+[1m== 3. ORDER PLACEMENT & IMMEDIATE CANCEL/SQUARE-OFF LIFECYCLE[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m PAPER Order Placed: UUIDv4 Execution ID 7e552bd3... | Status: FILLED
+  [92m[ PASS ][0m SQLite Audit Log Verified: Order 7e552bd3... registered with status FILLED
+  [92m[ PASS ][0m PAPER Cancellation Verified: State transitioned to CANCELLED, DB updated, zero orphan positions
+  [92m[ PASS ][0m LIVE Pre-Flight Dispatched: Order ID ANGEL_ORD_778899 | UUID c165adb5...
+  [92m[ PASS ][0m LIVE Cancellation Certified: Forwarded to Angel One gateway, state cleaned, 0 thread leaks
+
+[1m== 4. MULTI-BROKER VAULT & TWO-WAY SETTINGS SYNCHRONIZATION[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m ANGEL_ONE  Profile Verified: Client ID=AAAE906150, TPIN=636608, Live TOTP=415444
+  [92m[ PASS ][0m SHOONYA    Profile Verified: Client ID=FA12345, TPIN=123456, Live TOTP=780277
+  [92m[ PASS ][0m GROWW      Profile Verified: Client ID=GROWW_USER_01, TPIN=123456, Live TOTP=846301
+  [92m[ PASS ][0m Two-Way Settings Synchronization Certified: Real-time sync between Dialog & Sidebar
+
+[1m== 5. STRICT PAGE ISOLATION AUDIT (LIVE TRADING VS DASHBOARD)[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m Page Isolation Verified: Live Trading View (Page 1) strictly isolated from Dashboard (Page 0)
+
+[1m== 6. FRONT-PAGE RISK CONTROLLER & UNIFORM RISK ENFORCEMENT[0m
+  ----------------------------------------------------------------------------
+  [92m[ PASS ][0m Margin Ceiling Rejection Verified: [RISK REJECT] Required margin exceeds user limit ₹1,000.00.
+  [92m[ PASS ][0m Uniform PAPER Sizing & Bracket SL: Qty=10, SL=₹492.00, Risk=₹80.00 <= ₹80.00
+  [92m[ PASS ][0m Uniform LIVE Sizing & Clamping: Effective Cap=₹1500.00, Qty=15, Derived SL=₹492.00
+  [92m[ PASS ][0m Circuit Breaker Tripped: Circuit Breaker TRIPPED: Cumulative intraday realized loss ₹350.00 >= 2.5x max SL limit (₹300.00). Trading engine locked.
+
+================================================================================
+  OMNITRADEPRO - END-TO-END EXECUTION & LIFECYCLE CERTIFICATION MATRIX
+================================================================================
+  DIMENSION                                                    | STATUS    
+  --------------------------------------------------------------------------
+  Strategies Voting Output (SMC, VWAP, Dual EMA, SuperTrend)   | [92m[ PASS ][0m
+  Quorum Consensus (>=75%) & Predictive Gate (>=65%)           | [92m[ PASS ][0m
+  Pre-Flight Order Placement & Immediate Cancellation          | [92m[ PASS ][0m
+  Settings Synchronization across Angel One, Shoonya, Groww    | [92m[ PASS ][0m
+  Page Isolation (Live Trading View vs Dashboard)              | [92m[ PASS ][0m
+  Execution Mode & Front-Page Risk Controller Enforcement      | [92m[ PASS ][0m
+================================================================================
+

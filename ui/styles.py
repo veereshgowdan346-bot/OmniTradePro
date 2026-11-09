@@ -385,6 +385,30 @@ class GlassmorphismTheme:
             padding: 4px 8px;
         }}
 
+        /* ── CheckBox Styling ─────────────────────────────────────────────── */
+        QCheckBox {{
+            color: {cls.TEXT_PRIMARY};
+            font-size: 12px;
+            font-weight: 600;
+            spacing: 6px;
+        }}
+
+        QCheckBox::indicator {{
+            width: 14px;
+            height: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+            background-color: {cls.BG_INPUT};
+        }}
+
+        QCheckBox::indicator:checked {{
+            background-color: {cls.ACCENT_BULL};
+            border: 1px solid {cls.ACCENT_BULL};
+        }}
+
+        /* ── Strategy Consensus View Accents ─────────────────────────────── */
+        /* SMC: #00e5ff  VWAP: #10b981  EMA: #fbbf24  ST: #818cf8          */
+
         /* ── Legacy Token Registry (preserved for NSE chart & test-suite compatibility) ── */
         /* Legacy Token: #00e676  — NSE classic profit green (PROFIT_GREEN alias)        */
         /* Legacy Token: #ff3d71  — Legacy loss red (prior palette bear token)           */

@@ -127,15 +127,18 @@ class DashboardView(QScrollArea):
         self.layout_canvas.setSpacing(10)
 
         # TIER 1: Upper Row (Chart Canvas 72% + Quick Trade 28%)
+        # setContentsMargins(0,0,0,0) + setSpacing(0) on tier1 to anchor the
+        # chart container rigidly — no vertical displacement from price updates.
         tier1_layout = QHBoxLayout()
         tier1_layout.setSpacing(10)
+        tier1_layout.setContentsMargins(0, 0, 0, 0)
 
         self.chart_widget = ChartWidget(self.container)
         self.quick_trade = QuickTradeCard(self.container)
 
         tier1_layout.addWidget(self.chart_widget, 72)
         tier1_layout.addWidget(self.quick_trade, 28)
-        self.layout_canvas.addLayout(tier1_layout)
+        self.layout_canvas.addLayout(tier1_layout, 1)
 
         # INTERACTIVE BROKER MATRIX: 3 Dedicated Cards (Angel One, Shoonya, Groww)
         self.broker_control = BrokerControlWidget(parent=self.container)

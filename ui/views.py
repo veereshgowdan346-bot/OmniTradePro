@@ -223,7 +223,7 @@ class LiveTradingView(BasePageView):
         dl.setSpacing(8)
 
         lbl_dom = QLabel("DEPTH OF MARKET (L2)", dom_card)
-        lbl_dom.setStyleSheet("color: #f8fafc; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
+        lbl_dom.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800; font-family: 'Segoe UI', sans-serif;")
         dl.addWidget(lbl_dom)
 
         dom_table = QTableWidget(5, 4, dom_card)
@@ -252,8 +252,8 @@ class LiveTradingView(BasePageView):
         except Exception:
             pass
 
-        bids = [("24,856.50", "450"), ("24,855.00", "1,200"), ("24,854.20", "850"), ("24,853.00", "2,100"), ("24,850.00", "5,400")]
-        asks = [("24,857.50", "600"), ("24,858.00", "1,150"), ("24,859.50", "900"), ("24,860.00", "3,400"), ("24,862.00", "4,200")]
+        bids = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
+        asks = [("--", "--"), ("--", "--"), ("--", "--"), ("--", "--"), ("--", "--")]
 
         for r in range(5):
             dom_table.setItem(r, 0, QTableWidgetItem(bids[r][0]))
@@ -288,7 +288,7 @@ class TradingBotsView(BasePageView):
 
     def _init_body(self) -> None:
         bots_card = QFrame(self.container)
-        bots_card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        bots_card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
         bl = QVBoxLayout(bots_card)
         bl.setSpacing(10)
 
@@ -311,7 +311,7 @@ class TradingBotsView(BasePageView):
             chk.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px;")
 
             lbl_inst = QLabel(inst, row_frame)
-            lbl_inst.setStyleSheet("color: #00e676; font-weight: bold;")
+            lbl_inst.setStyleSheet("color: #10b981; font-weight: bold;")
 
             lbl_strat = QLabel(strat, row_frame)
             lbl_strat.setStyleSheet("color: #90a4ae; font-size: 11px;")
@@ -320,7 +320,7 @@ class TradingBotsView(BasePageView):
             lbl_wt.setStyleSheet("color: #00f2fe; font-weight: bold;")
 
             btn_toggle = QPushButton("Enabled", row_frame)
-            btn_toggle.setStyleSheet("background-color: rgba(0, 230, 118, 0.2); border: 1px solid #00e676; color: #00e676; font-weight: bold; padding: 3px 8px; border-radius: 4px;")
+            btn_toggle.setStyleSheet("background-color: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #10b981; font-weight: bold; padding: 3px 8px; border-radius: 4px;")
 
             rl.addWidget(chk)
             rl.addWidget(lbl_inst)
@@ -353,7 +353,7 @@ class StrategiesView(BasePageView):
 
         for i, (title, params) in enumerate(strats):
             card = QFrame(self.container)
-            card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 12px;")
+            card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 12px;")
             cl = QVBoxLayout(card)
 
             cl.addWidget(QLabel(title, card))
@@ -362,7 +362,7 @@ class StrategiesView(BasePageView):
                 pr.addWidget(QLabel(p_name, card))
                 pr.addStretch()
                 v = QLabel(p_val, card)
-                v.setStyleSheet("color: #00e676; font-weight: bold;")
+                v.setStyleSheet("color: #10b981; font-weight: bold;")
                 pr.addWidget(v)
                 cl.addLayout(pr)
             cl.addStretch()
@@ -380,7 +380,7 @@ class MarketWatchView(BasePageView):
 
     def _init_body(self) -> None:
         card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 12px;")
+        card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 12px;")
         cl = QVBoxLayout(card)
 
         table = QTableWidget(10, 7, card)
@@ -415,7 +415,7 @@ class MarketWatchView(BasePageView):
             table.setItem(r, 5, QTableWidgetItem(vol))
 
             btn = QPushButton("Trade", card)
-            btn.setStyleSheet("background-color: #00e676; color: #060b13; font-weight: bold; padding: 2px 8px; border-radius: 4px; border: none;")
+            btn.setStyleSheet("background-color: #10b981; color: #060b13; font-weight: bold; padding: 2px 8px; border-radius: 4px; border: none;")
             table.setCellWidget(r, 6, btn)
 
         cl.addWidget(table)
@@ -431,7 +431,7 @@ class AutoTradeView(BasePageView):
 
     def _init_body(self) -> None:
         card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
         cl = QVBoxLayout(card)
         cl.setSpacing(12)
 
@@ -456,7 +456,7 @@ class AutoTradeView(BasePageView):
             desc_lbl.setStyleSheet("color: #78909c; font-size: 11px;")
 
             status_pill = QLabel("ACTIVE" if active else "OFF", row)
-            status_pill.setStyleSheet("color: #00e676; font-weight: bold; padding: 2px 6px;")
+            status_pill.setStyleSheet("color: #10b981; font-weight: bold; padding: 2px 6px;")
 
             rl.addWidget(chk)
             rl.addWidget(desc_lbl)
@@ -477,7 +477,7 @@ class BacktestView(BasePageView):
 
     def _init_body(self) -> None:
         ctrl_card = QFrame(self.container)
-        ctrl_card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 12px;")
+        ctrl_card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 12px;")
         cl = QHBoxLayout(ctrl_card)
 
         cl.addWidget(QLabel("Target Symbol:", ctrl_card))
@@ -503,7 +503,7 @@ class BacktestView(BasePageView):
 
         # Output Card
         self.out_card = QFrame(self.container)
-        self.out_card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        self.out_card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
         ol = QVBoxLayout(self.out_card)
 
         self.lbl_out_title = QLabel("SIMULATION REPORT: Ready to Run", self.out_card)
@@ -556,7 +556,7 @@ class AnalyticsView(BasePageView):
 
         for i, (title, val, col) in enumerate(metrics):
             card = QFrame(self.container)
-            card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 8px; padding: 12px;")
+            card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 12px;")
             cl = QVBoxLayout(card)
             cl.addWidget(QLabel(title, card))
             vl = QLabel(val, card)
@@ -576,7 +576,7 @@ class PortfolioView(BasePageView):
 
     def _init_body(self) -> None:
         card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
         cl = QVBoxLayout(card)
 
         cl.addWidget(QLabel("MULTI-BROKER MARGIN UTILIZATION", card))
@@ -629,7 +629,7 @@ class RiskManagerView(BasePageView):
     def _init_body(self) -> None:
         # Card 1: Dynamic Admin Risk & Capital Controls
         card_admin = QFrame(self.container)
-        card_admin.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 16px;")
+        card_admin.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 16px;")
         al = QVBoxLayout(card_admin)
         al.setSpacing(12)
 
@@ -815,7 +815,7 @@ class RiskManagerView(BasePageView):
 
         # Card 2: Circuit Breaker Controls & Manual Panic Halt
         card_cb = QFrame(self.container)
-        card_cb.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 14px;")
+        card_cb.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px;")
         cl = QVBoxLayout(card_cb)
         cl.setSpacing(10)
 
@@ -1028,6 +1028,206 @@ class RiskManagerView(BasePageView):
         self.lbl_status.setText("Status: <span style='color:#00e676; font-weight:bold;'>NORMAL (Trading Authorized)</span>")
 
 
+class StrategyConsensusView(BasePageView):
+    """
+    Strategy Consensus & Live Telemetry View.
+    Displays real-time 4-engine voting cards and quorum gauge.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(
+            "🧠 STRATEGY CONSENSUS & LIVE TELEMETRY",
+            "Real-time 4-algorithm voting matrix — SMC, VWAP, Dual EMA, SuperTrend with quorum gate.",
+            parent
+        )
+        self._init_body()
+
+    def _init_body(self) -> None:
+        # ── 4-Engine Voting Cards Row ────────────────────────────────────────
+        engines_layout = QHBoxLayout()
+        engines_layout.setSpacing(10)
+
+        engine_data = [
+            ("SMC Liquidity Grab", "🔵", "#00e5ff", "Scans for liquidity sweeps below/above swing lows/highs."),
+            ("Institutional VWAP", "🟢", "#10b981", "Tracks cumulative VWAP deviation and volume confirmation."),
+            ("Dual EMA 9/21", "🟡", "#fbbf24", "Fast/Slow exponential cross with momentum alignment."),
+            ("SuperTrend Gate", "🟣", "#818cf8", "ATR-based directional filter with trailing stop floor."),
+        ]
+
+        for name, dot, accent, desc in engine_data:
+            card = QFrame(self.container)
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #141a24;
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-top: 2px solid {accent};
+                    border-radius: 8px;
+                    padding: 12px;
+                }}
+            """)
+            cl = QVBoxLayout(card)
+            cl.setSpacing(6)
+
+            # Header row
+            hdr = QHBoxLayout()
+            dot_lbl = QLabel(dot, card)
+            dot_lbl.setStyleSheet(f"color: {accent}; font-size: 14px;")
+            name_lbl = QLabel(name, card)
+            name_lbl.setStyleSheet(f"color: #f8fafc; font-size: 11px; font-weight: 800;")
+            hdr.addWidget(dot_lbl)
+            hdr.addWidget(name_lbl)
+            hdr.addStretch()
+            cl.addLayout(hdr)
+
+            # Signal badge
+            signal_lbl = QLabel("NEUTRAL", card)
+            signal_lbl.setStyleSheet(
+                "background-color: rgba(100, 116, 139, 0.15); border: 1px solid rgba(100, 116, 139, 0.4); "
+                "border-radius: 4px; color: #94a3b8; font-size: 12px; font-weight: 800; padding: 4px 10px;"
+            )
+            try:
+                signal_lbl.setAlignment(Qt.AlignCenter)
+            except Exception:
+                pass
+            cl.addWidget(signal_lbl)
+
+            # Confidence bar
+            conf_bar = QProgressBar(card)
+            conf_bar.setRange(0, 100)
+            conf_bar.setValue(0)
+            conf_bar.setTextVisible(False)
+            conf_bar.setFixedHeight(6)
+            conf_bar.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: #0f1824;
+                    border: none;
+                    border-radius: 3px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {accent};
+                    border-radius: 3px;
+                }}
+            """)
+            cl.addWidget(conf_bar)
+
+            conf_txt = QLabel("Confidence: Awaiting feed", card)
+            conf_txt.setStyleSheet("color: #64748b; font-size: 10px;")
+            cl.addWidget(conf_txt)
+
+            desc_lbl = QLabel(desc, card)
+            desc_lbl.setStyleSheet("color: #475569; font-size: 9px;")
+            cl.addWidget(desc_lbl)
+
+            engines_layout.addWidget(card)
+
+        self.layout_main.addLayout(engines_layout)
+
+        # ── Consensus & Gate Row ─────────────────────────────────────────────
+        gate_layout = QHBoxLayout()
+        gate_layout.setSpacing(10)
+
+        # Quorum Gauge Card
+        quorum_card = QFrame(self.container)
+        quorum_card.setStyleSheet("""
+            QFrame {
+                background-color: #141a24;
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+                padding: 14px;
+            }
+        """)
+        ql = QVBoxLayout(quorum_card)
+        ql.setSpacing(8)
+
+        q_title = QLabel("⚡ QUORUM CONSENSUS GAUGE", quorum_card)
+        q_title.setStyleSheet("color: #00e5ff; font-size: 12px; font-weight: 800;")
+        ql.addWidget(q_title)
+
+        q_desc = QLabel("Vote threshold: ≥ 75% (3/4 algorithms) required for order dispatch.", quorum_card)
+        q_desc.setStyleSheet("color: #64748b; font-size: 10px;")
+        ql.addWidget(q_desc)
+
+        quorum_bar = QProgressBar(quorum_card)
+        quorum_bar.setRange(0, 100)
+        quorum_bar.setValue(0)
+        quorum_bar.setTextVisible(True)
+        quorum_bar.setFixedHeight(18)
+        quorum_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #0f1824;
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 4px;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 10px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #10b981, stop:1 #00e5ff);
+                border-radius: 3px;
+            }
+        """)
+        ql.addWidget(quorum_bar)
+
+        quorum_status = QLabel("Status: Awaiting live strategy feed", quorum_card)
+        quorum_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
+        ql.addWidget(quorum_status)
+        gate_layout.addWidget(quorum_card, 60)
+
+        # Predictive Gate Card
+        pred_card = QFrame(self.container)
+        pred_card.setStyleSheet("""
+            QFrame {
+                background-color: #141a24;
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+                padding: 14px;
+            }
+        """)
+        pl = QVBoxLayout(pred_card)
+        pl.setSpacing(8)
+
+        p_title = QLabel("📊 GBM PREDICTIVE PROBABILITY GATE", pred_card)
+        p_title.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: 800;")
+        pl.addWidget(p_title)
+
+        p_desc = QLabel("Forward reachability threshold: ≥ 65% required. ₹70 gross hurdle.", pred_card)
+        p_desc.setStyleSheet("color: #64748b; font-size: 10px;")
+        pl.addWidget(p_desc)
+
+        pred_bar = QProgressBar(pred_card)
+        pred_bar.setRange(0, 100)
+        pred_bar.setValue(0)
+        pred_bar.setTextVisible(True)
+        pred_bar.setFixedHeight(18)
+        pred_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #0f1824;
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 4px;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 10px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #fbbf24, stop:1 #f97316);
+                border-radius: 3px;
+            }
+        """)
+        pl.addWidget(pred_bar)
+
+        hurdle_lbl = QLabel("₹70 Net Hurdle: AWAITING SIGNAL", pred_card)
+        hurdle_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600; font-family: 'Consolas', monospace;")
+        pl.addWidget(hurdle_lbl)
+        gate_layout.addWidget(pred_card, 40)
+
+        self.layout_main.addLayout(gate_layout)
+        self.layout_main.addStretch()
+
+
 class ReportsView(BasePageView):
     """Page 10: Interactive SQLite trade_audit_log ledger with filters and ₹60 friction audit."""
 
@@ -1038,7 +1238,7 @@ class ReportsView(BasePageView):
 
     def _init_body(self) -> None:
         card = QFrame(self.container)
-        card.setStyleSheet("background-color: #0d1726; border: 1px solid #16243a; border-radius: 10px; padding: 12px;")
+        card.setStyleSheet("background-color: #141a24; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 12px;")
         cl = QVBoxLayout(card)
 
         # Controls

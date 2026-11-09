@@ -1,0 +1,7 @@
+C:\Users\veere\Desktop\shiva\brokers\test_strategy_order_lifecycle.py:48: DeprecationWarning: Enum value 'Qt::ApplicationAttribute.AA_DisableHighDpiScaling' is marked as deprecated, please check the documentation for more information.
+  _QApp.setAttribute(_Qt.AA_DisableHighDpiScaling, True)
+......
+----------------------------------------------------------------------
+Ran 6 tests in 22.387s
+
+OK

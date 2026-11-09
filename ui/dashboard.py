@@ -199,6 +199,12 @@ class HeaderTopBar(QFrame):
                 border-bottom: 1px solid rgba(255, 255, 255, 0.07);
             }
         """)
+        # Rigid fixed height — prevents label/price text changes from vertically
+        # displacing the chart widget below it.
+        try:
+            self.setFixedHeight(56)
+        except Exception:
+            pass
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -250,6 +256,11 @@ class HeaderTopBar(QFrame):
                     padding: 2px 8px;
                 }
             """)
+            # Fixed width prevents price text changes from resizing ticker cards
+            try:
+                t_card.setFixedWidth(104)
+            except Exception:
+                pass
             t_layout = QVBoxLayout(t_card)
             t_layout.setContentsMargins(6, 3, 6, 3)
             t_layout.setSpacing(1)
@@ -452,6 +463,12 @@ class SubHeaderNavBar(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setStyleSheet("background-color: #0b0e14; border-bottom: 1px solid rgba(255,255,255,0.05);")
+        # Rigid fixed height — prevents nav pill hover/focus changes from
+        # vertically pushing the chart widget below.
+        try:
+            self.setFixedHeight(36)
+        except Exception:
+            pass
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 4, 14, 6)
         layout.setSpacing(6)
