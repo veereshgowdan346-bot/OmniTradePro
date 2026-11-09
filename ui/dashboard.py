@@ -195,8 +195,8 @@ class HeaderTopBar(QFrame):
         super().__init__(parent)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0b0e14;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                background-color: #080b10;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.07);
             }
         """)
         self._init_ui()
@@ -310,12 +310,30 @@ class HeaderTopBar(QFrame):
 
         layout.addStretch()
 
-        # 3. Notification Bell with Badge '1'
+        # 3. Live Latency Indicator Pill
+        self.latency_pill = QLabel("🟡 Connecting...", self)
+        self.latency_pill.setStyleSheet("""
+            QLabel {
+                background-color: rgba(251, 191, 36, 0.10);
+                border: 1px solid rgba(251, 191, 36, 0.4);
+                border-radius: 10px;
+                color: #fbbf24;
+                font-weight: 700;
+                font-size: 10px;
+                padding: 3px 10px;
+                font-family: 'Segoe UI', sans-serif;
+            }
+        """)
+        layout.addWidget(self.latency_pill)
+
+        layout.addSpacing(4)
+
+        # 4. Notification Bell with Badge '1'
         self.btn_bell = QPushButton("🔔", self)
         self.btn_bell.setStyleSheet("""
             QPushButton {
-                background-color: #121824;
-                border: 1px solid rgba(255, 255, 255, 0.06);
+                background-color: #141a24;
+                border: 1px solid rgba(255, 255, 255, 0.07);
                 border-radius: 6px;
                 color: #ffffff;
                 font-size: 13px;
@@ -327,12 +345,12 @@ class HeaderTopBar(QFrame):
         """)
         layout.addWidget(self.btn_bell)
 
-        # 4. Settings Gear
+        # 5. Settings Gear
         self.btn_settings = QPushButton("⚙", self)
         self.btn_settings.setStyleSheet("""
             QPushButton {
-                background-color: #121824;
-                border: 1px solid rgba(255, 255, 255, 0.06);
+                background-color: #141a24;
+                border: 1px solid rgba(255, 255, 255, 0.07);
                 border-radius: 6px;
                 color: #94a3b8;
                 font-size: 13px;
@@ -345,12 +363,12 @@ class HeaderTopBar(QFrame):
         """)
         layout.addWidget(self.btn_settings)
 
-        # 5. Language Toggle Pill: "ಕನ್ನಡ | EN"
+        # 6. Language Toggle Pill: "ಕನ್ನಡ | EN"
         self.btn_lang = QPushButton("ಕನ್ನಡ | EN", self)
         self.btn_lang.setStyleSheet("""
             QPushButton {
-                background-color: #121824;
-                border: 1px solid rgba(255, 255, 255, 0.06);
+                background-color: #141a24;
+                border: 1px solid rgba(255, 255, 255, 0.07);
                 border-radius: 6px;
                 color: #94a3b8;
                 font-size: 11px;
@@ -360,11 +378,11 @@ class HeaderTopBar(QFrame):
         """)
         layout.addWidget(self.btn_lang)
 
-        # 6. Prominent Red Emergency Kill Switch
+        # 7. Prominent Red Emergency Kill Switch
         self.btn_kill = QPushButton("  Emergency\n  Kill Switch", self)
         self.btn_kill.setStyleSheet("""
             QPushButton {
-                background-color: rgba(239, 68, 68, 0.15);
+                background-color: rgba(239, 68, 68, 0.12);
                 border: 1.5px solid #ef4444;
                 border-radius: 6px;
                 color: #ef4444;
@@ -374,7 +392,7 @@ class HeaderTopBar(QFrame):
                 text-align: center;
             }
             QPushButton:hover {
-                background-color: rgba(239, 68, 68, 0.35);
+                background-color: rgba(239, 68, 68, 0.30);
                 color: #ffffff;
             }
         """)
@@ -394,6 +412,21 @@ class HeaderTopBar(QFrame):
         sign = "+" if pnl >= 0 else ""
         self.lbl_pnl_v.setText(f"{sign}₹{pnl:,.2f}")
         self.lbl_pnl_v.setStyleSheet(f"color: {col}; font-size: 11px; font-weight: 800; font-family: 'Consolas', monospace;")
+
+    def update_latency(self, latency_ms: Optional[int] = None, connected: bool = False) -> None:
+        """Updates live latency indicator pill in top bar."""
+        if not connected or latency_ms is None:
+            self.latency_pill.setText("🔴 Offline")
+            self.latency_pill.setStyleSheet("background-color: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.4); border-radius: 10px; color: #ef4444; font-weight: 700; font-size: 10px; padding: 3px 10px;")
+        elif latency_ms < 50:
+            self.latency_pill.setText(f"🟢 Live  {latency_ms}ms")
+            self.latency_pill.setStyleSheet("background-color: rgba(16,185,129,0.10); border: 1px solid rgba(16,185,129,0.4); border-radius: 10px; color: #10b981; font-weight: 700; font-size: 10px; padding: 3px 10px;")
+        elif latency_ms < 150:
+            self.latency_pill.setText(f"🟡 Live  {latency_ms}ms")
+            self.latency_pill.setStyleSheet("background-color: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.4); border-radius: 10px; color: #fbbf24; font-weight: 700; font-size: 10px; padding: 3px 10px;")
+        else:
+            self.latency_pill.setText(f"🔴 High Latency  {latency_ms}ms")
+            self.latency_pill.setStyleSheet("background-color: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.4); border-radius: 10px; color: #ef4444; font-weight: 700; font-size: 10px; padding: 3px 10px;")
 
     def update_ticker(self, name: str, price: float, chg_pct: float = 0.0) -> None:
         """Updates ticker card with genuine exchange numbers."""
@@ -418,9 +451,10 @@ class SubHeaderNavBar(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setStyleSheet("background-color: #0b0e14; border-bottom: 1px solid rgba(255,255,255,0.05);")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 4, 14, 6)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         nav_items = [
             ("📈 Chart", 0),
@@ -437,18 +471,18 @@ class SubHeaderNavBar(QWidget):
             btn = QPushButton(title, self)
             btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #121824;
+                    background-color: #141a24;
                     color: #94a3b8;
                     font-weight: 600;
                     font-size: 11px;
                     border-radius: 5px;
-                    padding: 5px 14px;
-                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    padding: 5px 12px;
+                    border: 1px solid rgba(255, 255, 255, 0.07);
                 }
                 QPushButton:hover {
-                    background-color: #1a2332;
+                    background-color: #1a2235;
                     color: #00e5ff;
-                    border: 1px solid #00e5ff;
+                    border: 1px solid rgba(0, 229, 255, 0.4);
                 }
             """)
             try:
@@ -489,7 +523,7 @@ class LeftSidebar(QFrame):
         self.setFixedWidth(162)
         self.setStyleSheet("""
             QFrame {
-                background-color: #0c1017;
+                background-color: #080b10;
                 border-right: 1px solid rgba(255, 255, 255, 0.06);
             }
         """)

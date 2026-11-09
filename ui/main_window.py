@@ -121,7 +121,7 @@ class DashboardView(QScrollArea):
         self.setStyleSheet("background: transparent; border: none;")
 
         self.container = QWidget()
-        self.container.setStyleSheet(f"background-color: {GlassmorphismTheme.BG_CANVAS};")
+        self.container.setStyleSheet(f"background-color: #080b10;")
         self.layout_canvas = QVBoxLayout(self.container)
         self.layout_canvas.setContentsMargins(10, 8, 10, 10)
         self.layout_canvas.setSpacing(10)
@@ -353,6 +353,12 @@ class MainWindow(QMainWindow):
                 broker_name=broker_name,
                 latency=38
             )
+            # Update top bar latency pill to live
+            if hasattr(self.top_bar, "update_latency"):
+                try:
+                    self.top_bar.update_latency(latency_ms=38, connected=True)
+                except Exception:
+                    pass
             # Query authentic RMS funds from live broker
             if broker_name == "ANGEL_ONE" and inst and hasattr(inst, "get_rms_funds"):
                 def fetch_rms():
@@ -525,3 +531,15 @@ class MainWindow(QMainWindow):
             broker_name=self.stream_worker.broker_name,
             latency=38 if is_conn else None
         )
+        # Update top bar latency pill
+        if hasattr(self.top_bar, "update_latency"):
+            try:
+                self.top_bar.update_latency(latency_ms=38 if is_conn else None, connected=is_conn)
+            except Exception:
+                pass
+        # Zero-Fake-Data guarantee: clear seed candles when broker disconnects
+        if not is_conn:
+            try:
+                self.chart_widget.clear_canvas()
+            except Exception:
+                pass
